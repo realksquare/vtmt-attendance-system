@@ -115,6 +115,14 @@ def read_root():
     return response
 
 
+@app.get("/favicon.ico")
+def get_favicon():
+    fav_path = os.path.join(os.path.dirname(__file__), "favicon.ico")
+    if os.path.exists(fav_path):
+        return FileResponse(fav_path, media_type="image/x-icon")
+    return Response(status_code=204)
+
+
 @app.get("/manifest.json")
 def get_pwa_manifest():
     manifest_path = os.path.join(WEB_DIR, "manifest.json")

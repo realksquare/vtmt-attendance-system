@@ -1,4 +1,4 @@
-const CACHE_NAME = 'smart-attendance-v10';
+const CACHE_NAME = 'smart-attendance-v11';
 
 self.addEventListener('install', (event) => {
     self.skipWaiting();

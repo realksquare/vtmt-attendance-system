@@ -1196,3 +1196,51 @@ async function _populateBurstSlotSelect() {
     } catch (e) { /* ignore */ }
 }
 
+/* Explicit Global Window Bindings for ES Module Compatibility */
+Object.assign(window, {
+    pressPin,
+    clearPin,
+    submitPin,
+    logout,
+    openEnrollModal,
+    closeEnrollModal,
+    captureEnrollFrame,
+    submitEnrollment,
+    openEnrollStaffModal,
+    closeEnrollStaffModal,
+    captureEnrollStaffFrame,
+    submitStaffEnrollment,
+    openEditStaffModal,
+    closeEditStaffModal,
+    captureEditStaffFrame,
+    deleteStaffMember,
+    editStudentProfile,
+    closeEditStudentModal,
+    captureEditFrame,
+    submitStudentUpdate,
+    confirmDeleteStudent,
+    sortStudentsTable,
+    addTimetableSlotRow,
+    removeTimetableSlotRow,
+    saveTimetableSchedule,
+    processTimetableOcr,
+    submitStaffOverride,
+    exportExcel,
+    refreshAdminStats,
+    adminStartScheduler,
+    adminStopScheduler,
+    adminTriggerBurst,
+    adminClearTodayAttendance,
+    adminClearTodayUnknowns,
+    switchTab,
+    renderStaffHourView,
+    renderFullMatrix,
+    renderStudentsDirectory,
+    renderStaffDirectory,
+    renderStaffAttendance,
+    renderTimetableSetup,
+    renderUnknowns,
+    renderAdminPanel
+});
+
+
