@@ -42,32 +42,59 @@ class FaceRecognizer:
     @staticmethod
     def detect_phone_bezel(full_frame: np.ndarray, face_box: np.ndarray) -> bool:
         """
-        Detects rectangular smartphone/tablet screen bezels and device borders around the face box.
+        Detects rectangular smartphone/tablet screen bezels tightly enclosing the face box.
+        Uses strict compactness + solidity + area bounds to avoid false positives on wall
+        edges, door frames, furniture, or any large room features.
         """
         if full_frame is None or face_box is None or len(face_box) < 4:
             return False
 
         try:
-            h, w, _ = full_frame.shape
+            fh, fw, _ = full_frame.shape
+            frame_area = float(fh * fw)
             gray = cv2.cvtColor(full_frame, cv2.COLOR_BGR2GRAY)
             blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-            edges = cv2.Canny(blurred, 40, 120)
+            edges = cv2.Canny(blurred, 50, 130)
 
             contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             fx1, fy1, fx2, fy2 = int(face_box[0]), int(face_box[1]), int(face_box[2]), int(face_box[3])
+            face_area = float((fx2 - fx1) * (fy2 - fy1))
 
             for cnt in contours:
-                area = cv2.contourArea(cnt)
-                if area > 12000: # Typical screen bounding area
-                    peri = cv2.arcLength(cnt, True)
-                    approx = cv2.approxPolyDP(cnt, 0.03 * peri, True)
-                    if 4 <= len(approx) <= 6:
-                        rx, ry, rw, rh = cv2.boundingRect(approx)
-                        aspect = float(rw) / float(rh) if rh > 0 else 0
-                        if (0.35 <= aspect <= 0.75) or (1.30 <= aspect <= 2.30):
-                            # Check if contour surrounds or bounds the face box
-                            if (rx <= fx1 + 30) and (ry <= fy1 + 30) and (rx + rw >= fx2 - 30) and (ry + rh >= fy2 - 30):
-                                return True
+                cnt_area = cv2.contourArea(cnt)
+
+                # Phone must be a compact small object: 1.5x face area <= cnt <= 40% of frame
+                if cnt_area < face_area * 1.5 or cnt_area > frame_area * 0.40:
+                    continue
+
+                # Must be a convex, filled, solid shape — not an open wall edge line
+                hull = cv2.convexHull(cnt)
+                hull_area = cv2.contourArea(hull)
+                if hull_area < 1:
+                    continue
+                solidity = float(cnt_area) / float(hull_area)
+                if solidity < 0.70:  # Open/irregular contours (wall edges) have low solidity
+                    continue
+
+                peri = cv2.arcLength(cnt, True)
+                approx = cv2.approxPolyDP(cnt, 0.04 * peri, True)
+                if not (4 <= len(approx) <= 6):
+                    continue
+
+                rx, ry, rw, rh = cv2.boundingRect(approx)
+                aspect = float(rw) / float(rh) if rh > 0 else 0
+
+                # Phone portrait: 0.42–0.60; landscape: 1.65–2.40
+                is_phone_shape = (0.42 <= aspect <= 0.60) or (1.65 <= aspect <= 2.40)
+                if not is_phone_shape:
+                    continue
+
+                # Contour must tightly surround the face (tight margins)
+                margin = 20
+                if (rx <= fx1 + margin and ry <= fy1 + margin
+                        and rx + rw >= fx2 - margin and ry + rh >= fy2 - margin):
+                    return True
+
             return False
         except Exception:
             return False
@@ -102,7 +129,7 @@ class FaceRecognizer:
                 frame_area = float(fh * fw)
                 face_area = float(face_h * face_w)
                 face_ratio = face_area / frame_area
-                if face_ratio < 0.035:  # Face must cover at least 3.5% of frame
+                if face_ratio < 0.020:  # Face must cover at least 2% of frame
                     return False, 0.0, "Face Too Small - Move Closer to Camera"
 
             # --- Stage 1: Surrounding Context Screen Glow Detection ---
@@ -112,9 +139,9 @@ class FaceRecognizer:
                 bbox = face_obj.bbox.astype(int)
                 fh, fw, _ = full_frame.shape
                 fx1, fy1, fx2, fy2 = bbox[0], bbox[1], bbox[2], bbox[3]
-                pad = max(18, int((fx2 - fx1) * 0.25))
+                face_w_px = fx2 - fx1
+                pad = max(22, int(face_w_px * 0.30))
 
-                # Build surrounding ring region (avoiding out-of-bounds)
                 outer_x1 = max(0, fx1 - pad)
                 outer_y1 = max(0, fy1 - pad)
                 outer_x2 = min(fw, fx2 + pad)
@@ -122,7 +149,6 @@ class FaceRecognizer:
 
                 surround_region = full_frame[outer_y1:outer_y2, outer_x1:outer_x2].copy()
 
-                # Mask out the face area itself to get just the surrounding ring
                 inner_sy1 = fy1 - outer_y1
                 inner_sx1 = fx1 - outer_x1
                 inner_sy2 = inner_sy1 + (fy2 - fy1)
@@ -132,20 +158,23 @@ class FaceRecognizer:
                               max(0, inner_sx1):min(surround_region.shape[1], inner_sx2)] = False
 
                 if surround_mask.any():
-                    ring_pixels = surround_region[surround_mask]
                     surr_hsv = cv2.cvtColor(surround_region, cv2.COLOR_BGR2HSV)
                     surr_v = surr_hsv[:, :, 2][surround_mask]
                     surr_s = surr_hsv[:, :, 1][surround_mask]
 
-                    # Screen backlight: surrounding ring very bright AND very low saturation (white backlight)
-                    screen_surround_ratio = float(np.mean((surr_v > 200) & (surr_s < 40)))
-                    if screen_surround_ratio > 0.30:
+                    # Screen backlight: very bright ring + extremely low saturation
+                    # Real walls/backgrounds may be bright but will have > 40 saturation std-dev
+                    # Phone OLED backlight is uniformly flat white (s < 15, v > 220)
+                    screen_surround_ratio = float(np.mean((surr_v > 220) & (surr_s < 15)))
+                    if screen_surround_ratio > 0.55:
                         return False, 0.0, "Screen Backlight Surround Glow Detected"
 
-                    # Uniform surround brightness (phone screen uniform illumination)
+                    # Uniform + extremely bright: only OLED screens are THIS uniform
                     surr_v_std = float(np.std(surr_v.astype(np.float32)))
                     surr_v_mean = float(np.mean(surr_v.astype(np.float32)))
-                    if surr_v_mean > 160 and surr_v_std < 28:
+                    surr_s_mean = float(np.mean(surr_s.astype(np.float32)))
+                    # White wall has saturation > 10; phone backlight is near-zero saturation
+                    if surr_v_mean > 210 and surr_v_std < 12 and surr_s_mean < 10:
                         return False, 0.0, "Uniform Screen Backlight Detected"
 
             # --- Stage 2: Phone Bezel Contour Detection ---
