@@ -323,15 +323,130 @@
 
             <!-- TAB 6: Admin Panel -->
             <div id="tab-admin-view" class="tab-view" style="display:none;">
-                <div class="card">
+
+                <!-- System Stats Dashboard -->
+                <div class="card" style="margin-bottom:16px;">
                     <div class="card-title">
-                        <span><i class="fa-solid fa-user-shield" style="color:var(--rose);"></i> Admin Controls & Activity Logs</span>
-                        <button class="btn btn-primary" onclick="openEnrollModal()">
-                            <i class="fa-solid fa-user-plus"></i> Enroll Student
+                        <span><i class="fa-solid fa-gauge-high" style="color:var(--primary);"></i> Live System Dashboard</span>
+                        <button class="btn btn-secondary" onclick="refreshAdminStats()" id="btn-refresh-stats">
+                            <i class="fa-solid fa-rotate-right"></i> Refresh
                         </button>
                     </div>
+                    <div id="admin-stats-grid" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:12px; margin-top:4px;">
+                        <div class="stat-card-mini" id="stat-students"><i class="fa-solid fa-user-graduate"></i><span class="stat-val">—</span><span class="stat-lbl">Students</span></div>
+                        <div class="stat-card-mini" id="stat-staff"><i class="fa-solid fa-chalkboard-teacher"></i><span class="stat-val">—</span><span class="stat-lbl">Staff</span></div>
+                        <div class="stat-card-mini" id="stat-slots"><i class="fa-solid fa-calendar-days"></i><span class="stat-val">—</span><span class="stat-lbl">Timetable Slots</span></div>
+                        <div class="stat-card-mini" id="stat-present"><i class="fa-solid fa-circle-check" style="color:var(--green);"></i><span class="stat-val">—</span><span class="stat-lbl">Present Today</span></div>
+                        <div class="stat-card-mini" id="stat-unknowns"><i class="fa-solid fa-triangle-exclamation" style="color:var(--amber);"></i><span class="stat-val">—</span><span class="stat-lbl">Unknown Alerts</span></div>
+                        <div class="stat-card-mini" id="stat-time"><i class="fa-solid fa-clock"></i><span class="stat-val" style="font-size:11px;">—</span><span class="stat-lbl">Server Time</span></div>
+                    </div>
+                </div>
 
-                    <h4 style="font-size:14px; font-weight:700; margin-bottom:10px;">Recent Staff Activity Logs</h4>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
+
+                    <!-- Scheduler Control -->
+                    <div class="card">
+                        <div class="card-title">
+                            <span><i class="fa-solid fa-robot" style="color:var(--primary);"></i> Automated Scheduler</span>
+                        </div>
+                        <p style="font-size:12px; color:var(--text-muted); margin-bottom:14px; line-height:1.6;">
+                            The scheduler monitors timetable slots and automatically triggers 3 burst windows
+                            (First 5m / Mid 5m / Last 5m) per lecture hour using the camera.
+                        </p>
+                        <div id="scheduler-status-badge" style="margin-bottom:14px; font-size:12px; font-weight:600;">
+                            <span class="badge badge-absent" id="sched-status-label"><i class="fa-solid fa-circle-xmark"></i> Not Running</span>
+                            <span id="sched-start-time" style="font-size:11px; color:var(--text-muted); margin-left:8px;"></span>
+                        </div>
+                        <div style="display:flex; gap:10px;">
+                            <button class="btn btn-primary" id="btn-start-scheduler" onclick="adminStartScheduler()" style="flex:1; justify-content:center;">
+                                <i class="fa-solid fa-play"></i> Start Scheduler
+                            </button>
+                            <button class="btn btn-danger" id="btn-stop-scheduler" onclick="adminStopScheduler()" style="flex:1; justify-content:center;" disabled>
+                                <i class="fa-solid fa-stop"></i> Stop
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Test Burst Capture -->
+                    <div class="card">
+                        <div class="card-title">
+                            <span><i class="fa-solid fa-camera-rotate" style="color:var(--amber);"></i> Test Burst Capture</span>
+                        </div>
+                        <p style="font-size:12px; color:var(--text-muted); margin-bottom:14px; line-height:1.6;">
+                            Trigger an instant 15-second camera burst for testing face recognition on the selected slot.
+                        </p>
+                        <div class="form-group" style="margin-bottom:10px;">
+                            <label style="font-size:12px;">Timetable Slot:</label>
+                            <select class="form-control" id="burst-slot-select" style="font-size:13px;"></select>
+                        </div>
+                        <div style="display:flex; gap:10px; margin-bottom:10px;">
+                            <select class="form-control" id="burst-window-select" style="font-size:12px; flex:1;">
+                                <option value="WINDOW_A">Window A (First 5m)</option>
+                                <option value="WINDOW_B">Window B (Mid 5m)</option>
+                                <option value="WINDOW_C">Window C (Last 5m)</option>
+                            </select>
+                            <select class="form-control" id="burst-duration-select" style="font-size:12px; flex:1;">
+                                <option value="15">15 sec</option>
+                                <option value="30">30 sec</option>
+                                <option value="60">60 sec</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-primary" onclick="adminTriggerBurst()" style="width:100%; justify-content:center;">
+                            <i class="fa-solid fa-bolt"></i> Trigger Burst Now
+                        </button>
+                    </div>
+                </div>
+
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
+
+                    <!-- Quick Actions -->
+                    <div class="card">
+                        <div class="card-title">
+                            <span><i class="fa-solid fa-wand-magic-sparkles" style="color:var(--rose);"></i> Admin Quick Actions</span>
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap:10px; margin-top:4px;">
+                            <button class="btn btn-primary" onclick="openEnrollModal()" style="justify-content:flex-start;">
+                                <i class="fa-solid fa-user-plus"></i> Enroll New Student
+                            </button>
+                            <button class="btn btn-secondary" onclick="openEnrollStaffModal()" style="justify-content:flex-start;">
+                                <i class="fa-solid fa-id-badge"></i> Enroll New Staff Member
+                            </button>
+                            <button class="btn btn-secondary" onclick="exportExcel()" style="justify-content:flex-start;">
+                                <i class="fa-solid fa-file-excel" style="color:#22c55e;"></i> Export Attendance (.xlsx)
+                            </button>
+                            <button class="btn btn-secondary" onclick="switchTab('tab-timetable-setup')" style="justify-content:flex-start;">
+                                <i class="fa-solid fa-calendar-plus"></i> Edit Timetable Schedule
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Danger Zone -->
+                    <div class="card" style="border:1px solid rgba(244,63,94,0.3);">
+                        <div class="card-title">
+                            <span><i class="fa-solid fa-skull-crossbones" style="color:var(--rose);"></i> Danger Zone</span>
+                        </div>
+                        <p style="font-size:11px; color:var(--text-muted); margin-bottom:14px; line-height:1.6;">
+                            These actions are irreversible and will permanently delete data for today.
+                        </p>
+                        <div style="display:flex; flex-direction:column; gap:10px;">
+                            <button class="btn btn-danger" onclick="adminClearTodayAttendance()" style="justify-content:flex-start;">
+                                <i class="fa-solid fa-trash"></i> Clear Today's Attendance Records
+                            </button>
+                            <button class="btn btn-danger" onclick="adminClearTodayUnknowns()" style="justify-content:flex-start;">
+                                <i class="fa-solid fa-user-slash"></i> Clear Today's Unknown Face Alerts
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Staff Activity Logs -->
+                <div class="card">
+                    <div class="card-title">
+                        <span><i class="fa-solid fa-clipboard-list" style="color:var(--text-muted);"></i> Staff Activity Logs</span>
+                        <button class="btn btn-secondary" onclick="renderAdminPanel()" style="font-size:12px;">
+                            <i class="fa-solid fa-rotate-right"></i> Refresh Logs
+                        </button>
+                    </div>
                     <div class="table-responsive">
                         <table>
                             <thead>
@@ -343,7 +458,7 @@
                                 </tr>
                             </thead>
                             <tbody id="admin-activity-body">
-                                <tr><td colspan="4" style="text-align:center;">Loading staff activity...</td></tr>
+                                <tr><td colspan="4" style="text-align:center;">Loading activity logs...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -566,6 +681,6 @@
             navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW failed:', err));
         }
     </script>
-    <script type="module" src="/web/js/app.js?v=5.0"></script>
+    <script type="module" src="/web/js/app.js?v=6.0"></script>
 </body>
 </html>

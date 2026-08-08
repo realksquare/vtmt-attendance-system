@@ -13,6 +13,7 @@
     --amber: #d97706;
     --rose: #dc2626;
     --indigo: #4f46e5;
+    --green: #22c55e;
     
     --text-main: #f8fafc;
     --text-muted: #94a3b8;
@@ -364,4 +365,66 @@ td {
     padding: 10px;
     font-size: 11px;
     color: var(--text-muted);
+}
+
+/* Admin Control Center */
+.stat-card-mini {
+    background: #0f172a;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 14px 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    text-align: center;
+    transition: border-color 0.2s;
+}
+
+.stat-card-mini:hover {
+    border-color: var(--primary);
+}
+
+.stat-card-mini i {
+    font-size: 18px;
+    color: var(--primary);
+}
+
+.stat-card-mini .stat-val {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text-main);
+    line-height: 1;
+}
+
+.stat-card-mini .stat-lbl {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.btn-danger {
+    background: rgba(220, 38, 38, 0.15);
+    color: #f87171;
+    border: 1px solid rgba(220, 38, 38, 0.4);
+    padding: 9px 16px;
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.2s;
+}
+
+.btn-danger:hover {
+    background: rgba(220, 38, 38, 0.30);
+    border-color: #f87171;
+}
+
+.btn-danger:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
 }

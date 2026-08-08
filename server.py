@@ -87,8 +87,11 @@ async def verify_campus_wifi_subnet(request: Request, call_next):
     return response
 
 
-# Global Recognizer instance
+# Global Recognizer & Scheduler state
 recognizer = None
+_scheduler_thread = None
+_scheduler_running = False
+_scheduler_started_at = None
 
 def get_recognizer_instance():
     global recognizer
@@ -796,3 +799,138 @@ def download_excel():
         filename=f"Hourly_Attendance_Report_{today_str}.xlsx",
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+
+# ── Admin Control APIs ──────────────────────────────────────────────────────
+
+@app.get("/api/admin/stats")
+def get_system_stats():
+    """Return live system statistics for the Admin Control Center."""
+    db = SessionLocal()
+    try:
+        total_students = db.query(Student).count()
+        total_staff = db.query(StaffMember).count()
+        total_slots = len(get_all_timetable_slots())
+        today = date.today()
+        today_records = db.query(HourlyAttendance).filter(HourlyAttendance.date == today).all()
+        present_today = sum(1 for r in today_records if r.final_status in ("PRESENT", "MANUAL_PRESENT"))
+        unknown_today = db.query(UnknownFace).filter(UnknownFace.date == today).count()
+        return {
+            "total_students": total_students,
+            "total_staff": total_staff,
+            "total_slots": total_slots,
+            "present_today": present_today,
+            "unknown_alerts_today": unknown_today,
+            "scheduler_running": _scheduler_running,
+            "scheduler_started_at": _scheduler_started_at.strftime("%H:%M:%S") if _scheduler_started_at else None,
+            "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "today_date": str(today),
+        }
+    finally:
+        db.close()
+
+
+@app.post("/api/admin/scheduler/start")
+def start_scheduler_api(background_tasks: BackgroundTasks):
+    """Start the automated attendance scheduler daemon in background."""
+    import threading
+    from scheduler import AttendanceScheduler
+
+    global _scheduler_running, _scheduler_thread, _scheduler_started_at
+
+    if _scheduler_running:
+        return {"status": "already_running", "message": "Scheduler is already running."}
+
+    rec = get_recognizer_instance()
+
+    def run_loop():
+        global _scheduler_running
+        _scheduler_running = True
+        scheduler = AttendanceScheduler(rec)
+        try:
+            while _scheduler_running:
+                scheduler.check_and_run(override_date_check=False, show_window=False)
+                time.sleep(30)
+        finally:
+            _scheduler_running = False
+
+    _scheduler_started_at = datetime.now()
+    _scheduler_thread = threading.Thread(target=run_loop, daemon=True)
+    _scheduler_thread.start()
+    return {"status": "started", "message": f"Automated Attendance Scheduler started at {_scheduler_started_at.strftime('%H:%M:%S')}!"}
+
+
+@app.post("/api/admin/scheduler/stop")
+def stop_scheduler_api():
+    """Stop the running automated attendance scheduler daemon."""
+    global _scheduler_running, _scheduler_started_at
+
+    if not _scheduler_running:
+        return {"status": "not_running", "message": "Scheduler is not currently running."}
+
+    _scheduler_running = False
+    _scheduler_started_at = None
+    return {"status": "stopped", "message": "Automated Attendance Scheduler stopped."}
+
+
+class BurstTriggerRequest(BaseModel):
+    slot_id: str
+    window: str = "WINDOW_A"
+    duration_seconds: int = 15
+
+
+@app.post("/api/admin/burst/test")
+def trigger_test_burst(req: BurstTriggerRequest, background_tasks: BackgroundTasks):
+    """Trigger an instant demo burst capture session from Admin Panel."""
+    rec = get_recognizer_instance()
+    background_tasks.add_task(
+        run_burst_capture,
+        recognizer=rec,
+        slot_id=req.slot_id,
+        window=req.window,
+        duration_seconds=req.duration_seconds,
+        show_window=True
+    )
+    return {"status": "started", "message": f"Test burst ({req.window}) triggered for {req.duration_seconds}s on slot '{req.slot_id}'."}
+
+
+@app.delete("/api/admin/attendance/clear-today")
+def clear_today_attendance(admin_name: str = "Admin"):
+    """Clear all attendance records for today. Admin only."""
+    db = SessionLocal()
+    today = date.today()
+    try:
+        deleted = db.query(HourlyAttendance).filter(HourlyAttendance.date == today).delete()
+        db.commit()
+        log_activity(admin_name, "ADMIN_ID", "CLEAR_ATTENDANCE", f"Cleared {deleted} attendance records for {today}")
+        return {"status": "success", "message": f"Cleared {deleted} attendance record(s) for {today}."}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@app.delete("/api/admin/unknowns/clear-today")
+def clear_today_unknowns(admin_name: str = "Admin"):
+    """Clear today's unknown face alert logs and saved images. Admin only."""
+    db = SessionLocal()
+    today = date.today()
+    try:
+        records = db.query(UnknownFace).filter(UnknownFace.date == today).all()
+        deleted_files = 0
+        for r in records:
+            if r.image_path and os.path.exists(r.image_path):
+                os.remove(r.image_path)
+                deleted_files += 1
+        count = len(records)
+        db.query(UnknownFace).filter(UnknownFace.date == today).delete()
+        db.commit()
+        log_activity(admin_name, "ADMIN_ID", "CLEAR_UNKNOWNS", f"Cleared {count} unknown face records for {today}")
+        return {"status": "success", "message": f"Cleared {count} unknown face record(s) and {deleted_files} saved image(s)."}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+

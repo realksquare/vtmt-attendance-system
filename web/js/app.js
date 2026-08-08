@@ -822,6 +822,9 @@ async function renderUnknowns() {
 async function renderAdminPanel() {
     const body = document.getElementById('admin-activity-body');
     if (!body) return;
+    // Load stats and burst slot options in parallel
+    refreshAdminStats();
+    _populateBurstSlotSelect();
     try {
         const logs = await API.getAdminActivity();
         if (logs.length === 0) {
@@ -1054,3 +1057,142 @@ async function submitStudentUpdate(e) {
         showToast("Update Error: " + err.message, "error");
     }
 }
+
+/* switchTab helper (used by admin quick actions) */
+function switchTab(tabId) {
+    const tabBtns = document.querySelectorAll('.tab-btn');
+    const tabViews = document.querySelectorAll('.tab-view');
+    tabBtns.forEach(b => b.classList.remove('active'));
+    tabViews.forEach(v => v.style.display = 'none');
+    const target = document.getElementById(tabId);
+    if (target) target.style.display = 'block';
+    const btn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
+    if (btn) btn.classList.add('active');
+}
+
+/* ── Admin Control Center ──────────────────────────────────────────── */
+
+async function refreshAdminStats() {
+    const btn = document.getElementById('btn-refresh-stats');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>'; }
+    try {
+        const s = await API.getAdminStats();
+
+        const set = (id, val) => {
+            const el = document.querySelector(`#${id} .stat-val`);
+            if (el) el.textContent = val;
+        };
+        set('stat-students', s.total_students);
+        set('stat-staff', s.total_staff);
+        set('stat-slots', s.total_slots);
+        set('stat-present', s.present_today);
+        set('stat-unknowns', s.unknown_alerts_today);
+        const timeEl = document.querySelector('#stat-time .stat-val');
+        if (timeEl) timeEl.textContent = s.server_time ? s.server_time.slice(11, 16) : '—';
+
+        // Update scheduler badge
+        const badge = document.getElementById('sched-status-label');
+        const startTime = document.getElementById('sched-start-time');
+        const btnStart = document.getElementById('btn-start-scheduler');
+        const btnStop = document.getElementById('btn-stop-scheduler');
+
+        if (s.scheduler_running) {
+            if (badge) { badge.className = 'badge badge-present'; badge.innerHTML = '<i class="fa-solid fa-circle-check"></i> Running'; }
+            if (startTime) startTime.textContent = s.scheduler_started_at ? `Started at ${s.scheduler_started_at}` : '';
+            if (btnStart) btnStart.disabled = true;
+            if (btnStop) btnStop.disabled = false;
+        } else {
+            if (badge) { badge.className = 'badge badge-absent'; badge.innerHTML = '<i class="fa-solid fa-circle-xmark"></i> Not Running'; }
+            if (startTime) startTime.textContent = '';
+            if (btnStart) btnStart.disabled = false;
+            if (btnStop) btnStop.disabled = true;
+        }
+    } catch (e) {
+        console.error('Admin stats error:', e);
+    } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-rotate-right"></i> Refresh'; }
+    }
+}
+
+async function adminStartScheduler() {
+    try {
+        const res = await API.startScheduler();
+        showToast(res.message, 'success');
+        await refreshAdminStats();
+    } catch (err) {
+        showToast('Scheduler Error: ' + err.message, 'error');
+    }
+}
+
+async function adminStopScheduler() {
+    try {
+        const res = await API.stopScheduler();
+        showToast(res.message, 'info');
+        await refreshAdminStats();
+    } catch (err) {
+        showToast('Scheduler Error: ' + err.message, 'error');
+    }
+}
+
+async function adminTriggerBurst() {
+    const slotId = document.getElementById('burst-slot-select')?.value;
+    const window = document.getElementById('burst-window-select')?.value || 'WINDOW_A';
+    const duration = parseInt(document.getElementById('burst-duration-select')?.value || '15');
+
+    if (!slotId) { showToast('Please select a timetable slot first.', 'error'); return; }
+
+    try {
+        const res = await API.triggerTestBurst({ slot_id: slotId, window, duration_seconds: duration });
+        showToast(res.message, 'success');
+    } catch (err) {
+        showToast('Burst Error: ' + err.message, 'error');
+    }
+}
+
+async function adminClearTodayAttendance() {
+    showConfirmDialog(
+        'Clear Today\'s Attendance?',
+        'This will permanently delete ALL attendance records for today. This action cannot be undone.',
+        'Clear All',
+        async () => {
+            try {
+                const adminName = currentUser ? currentUser.name : 'Admin';
+                const res = await API.clearTodayAttendance(adminName);
+                showToast(res.message, 'success');
+                renderStaffHourView();
+                refreshAdminStats();
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            }
+        }
+    );
+}
+
+async function adminClearTodayUnknowns() {
+    showConfirmDialog(
+        'Clear Unknown Face Alerts?',
+        'This will delete all unknown face records and their saved images for today.',
+        'Clear All',
+        async () => {
+            try {
+                const adminName = currentUser ? currentUser.name : 'Admin';
+                const res = await API.clearTodayUnknowns(adminName);
+                showToast(res.message, 'success');
+                renderUnknowns();
+                refreshAdminStats();
+            } catch (err) {
+                showToast('Error: ' + err.message, 'error');
+            }
+        }
+    );
+}
+
+async function _populateBurstSlotSelect() {
+    try {
+        const slots = await API.getTimetable();
+        const select = document.getElementById('burst-slot-select');
+        if (!select) return;
+        select.innerHTML = slots.map(s => `<option value="${s.slot_id}">${s.slot_id} (${s.subject})</option>`).join('');
+    } catch (e) { /* ignore */ }
+}
+

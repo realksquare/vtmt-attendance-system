@@ -159,5 +159,54 @@ export const API = {
         const result = await res.json();
         if (!res.ok) throw new Error(result.detail || "Override failed");
         return result;
+    },
+
+    async getAdminStats() {
+        const res = await fetch(`${API_BASE}/admin/stats`);
+        if (!res.ok) throw new Error("Failed to fetch system stats");
+        return await res.json();
+    },
+
+    async startScheduler() {
+        const res = await fetch(`${API_BASE}/admin/scheduler/start`, { method: 'POST' });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || "Failed to start scheduler");
+        return result;
+    },
+
+    async stopScheduler() {
+        const res = await fetch(`${API_BASE}/admin/scheduler/stop`, { method: 'POST' });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || "Failed to stop scheduler");
+        return result;
+    },
+
+    async triggerTestBurst(data) {
+        const res = await fetch(`${API_BASE}/admin/burst/test`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || "Failed to trigger burst");
+        return result;
+    },
+
+    async clearTodayAttendance(adminName = 'Admin') {
+        const res = await fetch(`${API_BASE}/admin/attendance/clear-today?admin_name=${encodeURIComponent(adminName)}`, {
+            method: 'DELETE'
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || "Failed to clear attendance");
+        return result;
+    },
+
+    async clearTodayUnknowns(adminName = 'Admin') {
+        const res = await fetch(`${API_BASE}/admin/unknowns/clear-today?admin_name=${encodeURIComponent(adminName)}`, {
+            method: 'DELETE'
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || "Failed to clear unknowns");
+        return result;
     }
 };
