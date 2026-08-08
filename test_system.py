@@ -48,22 +48,34 @@ def test_cosine_similarity():
 
 def test_anti_spoof_liveness():
     print("Testing Anti-Spoofing & Presentation Attack Detection (PAD)...")
-    # 1. Flat screen / uniform crop -> should be rejected
+    # 1. Flat uniform screen-like surface -> should be rejected
     flat_crop = np.full((100, 100, 3), 128, dtype=np.uint8)
-    is_live_flat, score_flat, reason_flat = FaceRecognizer.verify_liveness(flat_crop)
-    assert not is_live_flat, f"Flat screen surface should be rejected as spoof, got {reason_flat}"
+    is_live_flat, _, reason_flat = FaceRecognizer.verify_liveness(flat_crop)
+    assert not is_live_flat, f"Flat screen surface should be rejected, got: {reason_flat}"
 
-    # 2. Natural skin face crop simulation (smooth spatial gradient with facial features)
-    skin_crop = np.zeros((120, 120, 3), dtype=np.uint8)
-    for r in range(120):
-        for c in range(120):
-            skin_crop[r, c] = [100 + r // 4, 130 + c // 4, 170 + (r + c) // 6]
-    cv2.circle(skin_crop, (40, 45), 10, (50, 70, 90), -1)
-    cv2.circle(skin_crop, (80, 45), 10, (50, 70, 90), -1)
-    cv2.line(skin_crop, (40, 85), (80, 85), (40, 50, 140), 4)
+    # 2. Live realistic skin-tone face crop (BGR skin values, natural gradient, facial structure)
+    # Use actual human skin-tone BGR range that maps to YCrCb skin chroma range
+    skin_crop = np.zeros((140, 140, 3), dtype=np.uint8)
+    for r in range(140):
+        for c in range(140):
+            # Warm human skin tone: B~110, G~150, R~190 with organic variation
+            skin_crop[r, c] = [
+                int(100 + 15 * np.sin(r * 0.15) + 5 * np.cos(c * 0.2)),
+                int(145 + 10 * np.cos(r * 0.12) + 8 * np.sin(c * 0.15)),
+                int(190 + 12 * np.sin((r + c) * 0.08))
+            ]
+    # Add facial feature shapes (eyes, mouth) for texture
+    cv2.circle(skin_crop, (45, 50), 12, (70, 90, 110), -1)   # left eye
+    cv2.circle(skin_crop, (95, 50), 12, (70, 90, 110), -1)   # right eye
+    cv2.ellipse(skin_crop, (70, 100), (25, 12), 0, 0, 180, (80, 80, 160), 3)  # mouth
+    cv2.line(skin_crop, (70, 60), (70, 85), (130, 140, 175), 2)  # nose bridge
+    # Gentle natural skin texture noise
+    noise = np.random.randint(-8, 8, skin_crop.shape, dtype=np.int16)
+    skin_crop = np.clip(skin_crop.astype(np.int16) + noise, 0, 255).astype(np.uint8)
     skin_crop = cv2.GaussianBlur(skin_crop, (3, 3), 0)
+
     is_live_skin, score_skin, reason_skin = FaceRecognizer.verify_liveness(skin_crop)
-    assert is_live_skin, f"Live textured skin face crop should pass liveness check, got {is_live_skin}, {reason_skin}"
+    assert is_live_skin, f"Realistic skin face crop should pass liveness check, got: is_live={is_live_skin}, reason={reason_skin}"
 
     print("[OK] Anti-Spoofing Presentation Attack Detection PASSED!")
 
