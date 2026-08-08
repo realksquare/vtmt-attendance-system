@@ -507,7 +507,7 @@ function closeEnrollStaffModal() {
     }
 }
 
-function captureEnrollStaffFrame() {
+async function captureEnrollStaffFrame() {
     const video = document.getElementById('staff-enroll-video');
     const preview = document.getElementById('staff-captured-preview');
     const base64Input = document.getElementById('staff_image_base64');
@@ -517,15 +517,40 @@ function captureEnrollStaffFrame() {
     canvas.width = video.videoWidth || 640;
     canvas.height = video.videoHeight || 480;
     const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    const dataUrl = canvas.toDataURL('image/jpeg');
+    // 1. Frame A
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const imgDataA = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+
+    showToast("Analyzing live face micro-motion...", "info");
+    await new Promise(r => setTimeout(r, 350));
+
+    // 2. Frame B
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const imgDataB = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+
+    let totalDiff = 0;
+    let sampleCount = 0;
+    for (let i = 0; i < imgDataA.length; i += 16) {
+        totalDiff += Math.abs(imgDataA[i] - imgDataB[i]);
+        sampleCount++;
+    }
+    const avgMotion = totalDiff / sampleCount;
+
+    if (avgMotion < 0.50) {
+        showToast("Anti-Spoofing Alert: Static photo / phone image detected! Please use a live face.", "error");
+        if (base64Input) base64Input.value = '';
+        if (preview) preview.style.display = 'none';
+        return;
+    }
+
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
     if (base64Input) base64Input.value = dataUrl;
     if (preview) {
         preview.src = dataUrl;
         preview.style.display = 'block';
     }
-    showToast("Staff face frame captured!", "info");
+    showToast("Live staff face frame verified & captured!", "info");
 }
 
 async function submitStaffEnrollment(e) {
@@ -873,7 +898,7 @@ function closeEnrollModal() {
     }
 }
 
-function captureEnrollFrame() {
+async function captureEnrollFrame() {
     const enrollVideo = document.getElementById('enroll-video');
     const capturedPreview = document.getElementById('captured-preview');
     const base64Input = document.getElementById('image_base64');
@@ -883,15 +908,42 @@ function captureEnrollFrame() {
     canvas.width = enrollVideo.videoWidth || 640;
     canvas.height = enrollVideo.videoHeight || 480;
     const ctx = canvas.getContext('2d');
-    ctx.drawImage(enrollVideo, 0, 0, canvas.width, canvas.height);
 
-    const dataUrl = canvas.toDataURL('image/jpeg');
+    // 1. Capture Frame A (0ms)
+    ctx.drawImage(enrollVideo, 0, 0, canvas.width, canvas.height);
+    const imgDataA = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+
+    showToast("Analyzing live face micro-motion...", "info");
+    await new Promise(r => setTimeout(r, 350));
+
+    // 2. Capture Frame B (350ms)
+    ctx.drawImage(enrollVideo, 0, 0, canvas.width, canvas.height);
+    const imgDataB = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+
+    // Calculate motion delta across sub-sampled pixels
+    let totalDiff = 0;
+    let sampleCount = 0;
+    for (let i = 0; i < imgDataA.length; i += 16) {
+        totalDiff += Math.abs(imgDataA[i] - imgDataB[i]);
+        sampleCount++;
+    }
+    const avgMotion = totalDiff / sampleCount;
+
+    // Static Photo Rejection: If avgMotion < 0.60, it's a completely static phone photo held still
+    if (avgMotion < 0.50) {
+        showToast("Anti-Spoofing Alert: Static photo / phone image detected! Please use a live face.", "error");
+        if (base64Input) base64Input.value = '';
+        if (capturedPreview) capturedPreview.style.display = 'none';
+        return;
+    }
+
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
     if (base64Input) base64Input.value = dataUrl;
     if (capturedPreview) {
         capturedPreview.src = dataUrl;
         capturedPreview.style.display = 'block';
     }
-    showToast("Webcam frame captured!", "info");
+    showToast("Live face frame verified & captured!", "info");
 }
 
 async function submitEnrollment(e) {

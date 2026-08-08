@@ -268,11 +268,13 @@ def update_student(student_id: str, req: StudentUpdateRequest):
             x1, y1, x2, y2 = max(0, box[0]), max(0, box[1]), min(w, box[2]), min(h, box[3])
             crop = frame[y1:y2, x1:x2]
 
-            is_live, liveness_score, reason = rec.verify_liveness(crop, faces[0])
+            is_live, liveness_score, reason = rec.verify_liveness(crop, faces[0], frame)
             if not is_live:
                 raise HTTPException(status_code=400, detail=f"Anti-Spoofing Alert: {reason}. Please position a live 3D face in front of the camera.")
 
             new_embedding = faces[0].embedding
+        except HTTPException as he:
+            raise he
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Face embedding extraction failed: {e}")
 
@@ -322,7 +324,7 @@ def enroll_student(req: StudentEnrollRequest):
         x1, y1, x2, y2 = max(0, box[0]), max(0, box[1]), min(w, box[2]), min(h, box[3])
         crop = frame[y1:y2, x1:x2]
 
-        is_live, liveness_score, reason = rec.verify_liveness(crop, faces[0])
+        is_live, liveness_score, reason = rec.verify_liveness(crop, faces[0], frame)
         if not is_live:
             raise HTTPException(status_code=400, detail=f"Anti-Spoofing Alert: {reason}! Please position a live 3D face in front of the camera.")
 
@@ -376,7 +378,7 @@ def enroll_staff_member(req: StaffEnrollRequest):
                     h, w, _ = frame.shape
                     x1, y1, x2, y2 = max(0, box[0]), max(0, box[1]), min(w, box[2]), min(h, box[3])
                     crop = frame[y1:y2, x1:x2]
-                    is_live, liveness_score, reason = rec.verify_liveness(crop, faces[0])
+                    is_live, liveness_score, reason = rec.verify_liveness(crop, faces[0], frame)
                     if not is_live:
                         raise HTTPException(status_code=400, detail=f"Anti-Spoofing Alert: {reason}! Please position a live 3D face in front of the camera.")
                     embedding = faces[0].embedding

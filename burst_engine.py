@@ -91,7 +91,7 @@ def run_burst_capture(
                 x1, y1, x2, y2 = max(0, box[0]), max(0, box[1]), min(w, box[2]), min(h, box[3])
                 crop = frame[y1:y2, x1:x2]
 
-                is_live, liveness_score, reason = recognizer.verify_liveness(crop, face)
+                is_live, liveness_score, reason = recognizer.verify_liveness(crop, face, frame)
                 if not is_live:
                     print(f"  -> [{window} ANTI-SPOOF REJECTED]: {reason} (Score: {liveness_score:.1f})")
                     cached_face_overlays.append((box, f"SPOOF: {reason}", (0, 0, 255)))

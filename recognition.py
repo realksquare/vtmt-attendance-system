@@ -40,11 +40,44 @@ class FaceRecognizer:
         return float(np.dot(emb1, emb2) / (norm1 * norm2))
 
     @staticmethod
-    def verify_liveness(face_crop: np.ndarray, face_obj: Optional[object] = None) -> Tuple[bool, float, str]:
+    def detect_phone_bezel(full_frame: np.ndarray, face_box: np.ndarray) -> bool:
         """
-        Adaptive Multi-Spectral Anti-Spoofing & Presentation Attack Detection (PAD) Filter.
-        Uses CLAHE contrast equalization and 2D FFT Moiré pattern analysis to ensure zero false rejections
-        for real human faces under dim, warm, or overhead lighting while strictly blocking phone screens & photos.
+        Detects rectangular smartphone/tablet screen bezels and device borders around the face box.
+        """
+        if full_frame is None or face_box is None or len(face_box) < 4:
+            return False
+
+        try:
+            h, w, _ = full_frame.shape
+            gray = cv2.cvtColor(full_frame, cv2.COLOR_BGR2GRAY)
+            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+            edges = cv2.Canny(blurred, 40, 120)
+
+            contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            fx1, fy1, fx2, fy2 = int(face_box[0]), int(face_box[1]), int(face_box[2]), int(face_box[3])
+
+            for cnt in contours:
+                area = cv2.contourArea(cnt)
+                if area > 12000: # Typical screen bounding area
+                    peri = cv2.arcLength(cnt, True)
+                    approx = cv2.approxPolyDP(cnt, 0.03 * peri, True)
+                    if 4 <= len(approx) <= 6:
+                        rx, ry, rw, rh = cv2.boundingRect(approx)
+                        aspect = float(rw) / float(rh) if rh > 0 else 0
+                        if (0.35 <= aspect <= 0.75) or (1.30 <= aspect <= 2.30):
+                            # Check if contour surrounds or bounds the face box
+                            if (rx <= fx1 + 30) and (ry <= fy1 + 30) and (rx + rw >= fx2 - 30) and (ry + rh >= fy2 - 30):
+                                return True
+            return False
+        except Exception:
+            return False
+
+    @staticmethod
+    def verify_liveness(face_crop: np.ndarray, face_obj: Optional[object] = None, full_frame: Optional[np.ndarray] = None) -> Tuple[bool, float, str]:
+        """
+        Strict Multi-Spectral Anti-Spoofing & Presentation Attack Detection (PAD) Filter.
+        Analyzes 2D FFT Moiré spectrum, YCrCb dermal skin chroma, HSV screen glare, Laplacian texture range,
+        and full-frame phone screen bezel detection to strictly block phone screens, tablets, and photos.
         
         Returns:
             (is_live: bool, liveness_score: float, reason: str)
@@ -55,16 +88,15 @@ class FaceRecognizer:
         try:
             h, w, _ = face_crop.shape
             
-            # 1. CLAHE Contrast & Lighting Equalization (Normalizes dim/harsh ambient room lighting)
+            # 1. CLAHE Contrast & Lighting Equalization
             gray_raw = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
             gray = clahe.apply(gray_raw)
 
-            # 2. Laplacian Texture Variance & Surface Sharpness
+            # 2. Laplacian Texture Variance
             laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
-            # 3. 2D Fast Fourier Transform (FFT) Moiré Grid Spectral Analysis
-            # Mobile screens display micro-pixel grid matrices producing periodic high-frequency Moiré peaks.
+            # 3. 2D Fast Fourier Transform (FFT) Moiré Pattern Grid Detection
             f = np.fft.fft2(gray_raw)
             fshift = np.fft.fftshift(f)
             mag = 20 * np.log(np.abs(fshift) + 1e-5)
@@ -75,11 +107,11 @@ class FaceRecognizer:
             total_freq_energy = mag.mean()
             high_freq_ratio = float(total_freq_energy / (low_freq_energy + 1e-5))
 
-            # 4. Equalized YCrCb Dermal Skin Chroma Spectrum Analysis
+            # 4. YCrCb Dermal Skin Chroma Spectrum Analysis
             ycrcb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2YCrCb)
             cr = ycrcb[:, :, 1]
             cb = ycrcb[:, :, 2]
-            skin_mask = (cr >= 125) & (cr <= 178) & (cb >= 70) & (cb <= 135)
+            skin_mask = (cr >= 128) & (cr <= 175) & (cb >= 75) & (cb <= 132)
             skin_ratio = float(np.count_nonzero(skin_mask)) / float(h * w)
 
             # 5. Specular Glass Reflection & RGB Backlight Glow Analysis
@@ -87,38 +119,39 @@ class FaceRecognizer:
             v_chan = hsv[:, :, 2]
             s_chan = hsv[:, :, 1]
 
-            # Glass screen reflection highlights (V > 250 and low saturation S < 20)
-            screen_glass_mask = (v_chan > 250) & (s_chan < 20)
+            screen_glass_mask = (v_chan > 248) & (s_chan < 25)
             screen_glass_ratio = float(np.count_nonzero(screen_glass_mask)) / float(h * w)
-            high_sat_ratio = float(np.count_nonzero(s_chan > 220)) / float(h * w)
+            high_sat_ratio = float(np.count_nonzero(s_chan > 210)) / float(h * w)
 
-            # InsightFace 3D Landmark & Bounding Confidence
             det_score = getattr(face_obj, 'det_score', 0.85) or 0.85
-
             liveness_score = laplacian_var * (skin_ratio + 0.2) * float(det_score)
 
-            # Smart Anti-Spoofing Rejection Rules (Targets Phone Screens & Photos):
-            # A) Moiré Screen Grid Rejection: Screen captures exhibit strong periodic frequency spikes (ratio > 0.88)
-            if high_freq_ratio > 0.88 and laplacian_var > 300.0:
+            # 6. Check Phone Bezel Edge Contour if full frame provided
+            if full_frame is not None and face_obj is not None and hasattr(face_obj, 'bbox'):
+                if FaceRecognizer.detect_phone_bezel(full_frame, face_obj.bbox):
+                    return False, liveness_score, "Phone Screen Device Frame Detected"
+
+            # Strict Un-coupled Rejection Rules for Phone Screens & Photos:
+            # Rule A: Moiré Screen Grid Spectrum Peak
+            if high_freq_ratio > 0.74:
                 return False, liveness_score, "Moiré Screen Grid Detected"
 
-            # B) Phone Screen Glass Glare Rejection: Requires BOTH glass specular reflection AND high frequency screen grid
-            if screen_glass_ratio > 0.18 and high_freq_ratio > 0.84:
+            # Rule B: Phone Screen Glass Specular Reflection
+            if screen_glass_ratio > 0.05:
                 return False, liveness_score, "Phone Glass Screen Glare"
 
-            # C) Flat Screen / Paper Surface Rejection (Zero texture detail)
-            if laplacian_var < 8.0:
-                return False, liveness_score, "Flat 2D Surface (Zero Texture)"
-
-            # D) Artificial Backlight RGB Glow Rejection (OLED/LCD saturation peak)
-            if high_sat_ratio > 0.45 and high_freq_ratio > 0.84:
+            # Rule C: Screen RGB Backlight Over-saturation
+            if high_sat_ratio > 0.28:
                 return False, liveness_score, "Screen RGB Backlight Glow"
 
-            # E) Non-Human Dermal Spectrum
-            if skin_ratio < 0.12 and det_score < 0.60:
+            # Rule D: Unnatural Texture Range (Phone photos over-sharpen > 350 or blur < 15)
+            if laplacian_var < 15.0 or laplacian_var > 350.0:
+                return False, liveness_score, "Unnatural Surface Texture"
+
+            # Rule E: Non-Dermal Skin Color Spectrum
+            if skin_ratio < 0.25:
                 return False, liveness_score, "Non-Dermal Color Spectrum"
 
-            # REAL HUMAN FACE PASSED: Accept face under natural room, dim, or overhead lighting!
             return True, float(liveness_score), "Live Face Verified"
         except Exception as err:
             print("Liveness verification error:", err)

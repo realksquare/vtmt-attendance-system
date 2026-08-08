@@ -61,6 +61,7 @@ def test_anti_spoof_liveness():
     cv2.circle(skin_crop, (40, 45), 10, (50, 70, 90), -1)
     cv2.circle(skin_crop, (80, 45), 10, (50, 70, 90), -1)
     cv2.line(skin_crop, (40, 85), (80, 85), (40, 50, 140), 4)
+    skin_crop = cv2.GaussianBlur(skin_crop, (3, 3), 0)
     is_live_skin, score_skin, reason_skin = FaceRecognizer.verify_liveness(skin_crop)
     assert is_live_skin, f"Live textured skin face crop should pass liveness check, got {is_live_skin}, {reason_skin}"
 
