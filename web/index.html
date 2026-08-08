@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0f172a">
+    <title>Smart Attendance — Campus App</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/web/css/style.css">
+</head>
+<body>
+
+    <!-- PIN Code Authentication Overlay -->
+    <div id="auth-screen" class="auth-overlay">
+        <div class="auth-card">
+            <div class="auth-icon">
+                <i class="fa-solid fa-lock"></i>
+            </div>
+            <h2 style="font-size:18px; font-weight:700; margin-bottom:4px;">Campus Attendance</h2>
+            <p style="font-size:12px; color:var(--text-muted);">Enter 4-Digit Security PIN</p>
+
+            <div class="pin-display">
+                <div class="pin-dot" id="dot-0"></div>
+                <div class="pin-dot" id="dot-1"></div>
+                <div class="pin-dot" id="dot-2"></div>
+                <div class="pin-dot" id="dot-3"></div>
+            </div>
+
+            <div class="keypad-grid">
+                <button class="keypad-btn" onclick="pressPin('1')">1</button>
+                <button class="keypad-btn" onclick="pressPin('2')">2</button>
+                <button class="keypad-btn" onclick="pressPin('3')">3</button>
+                <button class="keypad-btn" onclick="pressPin('4')">4</button>
+                <button class="keypad-btn" onclick="pressPin('5')">5</button>
+                <button class="keypad-btn" onclick="pressPin('6')">6</button>
+                <button class="keypad-btn" onclick="pressPin('7')">7</button>
+                <button class="keypad-btn" onclick="pressPin('8')">8</button>
+                <button class="keypad-btn" onclick="pressPin('9')">9</button>
+                <button class="keypad-btn" onclick="clearPin()"><i class="fa-solid fa-delete-left"></i></button>
+                <button class="keypad-btn" onclick="pressPin('0')">0</button>
+                <button class="keypad-btn" onclick="submitPin()"><i class="fa-solid fa-arrow-right"></i></button>
+            </div>
+            
+            <p id="pin-error" style="color:var(--rose); font-size:12px; font-weight:600; margin-top:14px; display:none;"></p>
+        </div>
+    </div>
+
+    <!-- Main App Shell -->
+    <div id="app-shell" style="display:none; flex-direction:column; min-height:100vh;">
+        
+        <!-- Header -->
+        <header class="app-header">
+            <div class="brand-title">
+                <i class="fa-solid fa-shield-cat" style="color:var(--primary);"></i>
+                <span>Smart Attendance</span>
+            </div>
+
+            <div class="user-tag">
+                <div style="text-align:right;">
+                    <div id="user-name" style="font-size:13px; font-weight:700;">Staff</div>
+                    <span id="user-role-badge" class="role-badge role-staff">STAFF</span>
+                </div>
+                <button class="btn btn-secondary" onclick="logout()" style="padding:6px 10px;" title="Logout">
+                    <i class="fa-solid fa-right-from-bracket"></i>
+                </button>
+            </div>
+        </header>
+
+        <main class="container">
+
+            <!-- Navigation Tabs -->
+            <nav class="tab-bar">
+                <button class="tab-btn active" data-tab="tab-hourly-view">Hour View</button>
+                <button class="tab-btn" data-tab="tab-full-matrix">Full Matrix</button>
+                <button class="tab-btn" data-tab="tab-students-directory">Students</button>
+                <button class="tab-btn admin-only" data-tab="tab-staff-directory" style="display:none;">Staff Directory</button>
+                <button class="tab-btn admin-only" data-tab="tab-staff-attendance" style="display:none;">Staff Attendance</button>
+                <button class="tab-btn" data-tab="tab-timetable-setup">Timetable</button>
+                <button class="tab-btn" data-tab="tab-unknowns-view">Unknowns</button>
+                <button class="tab-btn admin-only" data-tab="tab-admin-view" style="display:none;">Admin Panel</button>
+            </nav>
+
+            <!-- TAB 1: Staff Hourly View -->
+            <div id="tab-hourly-view" class="tab-view active">
+                <div class="card">
+                    <div class="card-title">
+                        <span><i class="fa-solid fa-clock" style="color:var(--primary);"></i> Active Lecture Session</span>
+                        <span class="badge badge-present" id="active-hour-badge">09:00 - 10:00</span>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Select Lecture Hour Slot:</label>
+                        <select class="form-control" id="staff-slot-select" onchange="renderStaffHourView()"></select>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-title">
+                        <span><i class="fa-solid fa-list-check" style="color:var(--emerald);"></i> Hour Attendance Logs</span>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Student</th>
+                                    <th>Win A (First 5m)</th>
+                                    <th>Win B (Mid 5m)</th>
+                                    <th>Win C (Last 5m)</th>
+                                    <th>Final Status</th>
+                                    <th>Remarks</th>
+                                </tr>
+                            </thead>
+                            <tbody id="staff-hour-table-body">
+                                <tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Loading lecture hour attendance...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-title">
+                        <span><i class="fa-solid fa-pen" style="color:var(--amber);"></i> Staff Manual Override</span>
+                    </div>
+
+                    <form id="form-staff-override" onsubmit="submitStaffOverride(event)">
+                        <div class="form-group">
+                            <label>Select Student:</label>
+                            <select class="form-control" id="override-student-select" required></select>
+                        </div>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                            <div class="form-group">
+                                <label>New Status:</label>
+                                <select class="form-control" id="override-status-select" required>
+                                    <option value="MANUAL_PRESENT">PRESENT (Manual)</option>
+                                    <option value="MANUAL_ABSENT">ABSENT (Manual)</option>
+                                    <option value="EXCUSED">EXCUSED / MEDICAL</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Reason Note (Required):</label>
+                                <input type="text" class="form-control" id="override-reason" placeholder="e.g. Verified by professor" required>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center;">
+                            <i class="fa-solid fa-check"></i> Submit Manual Override
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- TAB 2: Full Summary Matrix -->
+            <div id="tab-full-matrix" class="tab-view" style="display:none;">
+                <div class="card">
+                    <div class="card-title">
+                        <span><i class="fa-solid fa-table" style="color:var(--indigo);"></i> Full Today's Matrix</span>
+                        <button class="btn btn-secondary" onclick="exportExcel()" style="padding:6px 12px;">
+                            <i class="fa-solid fa-file-excel"></i> Export Excel
+                        </button>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr id="full-matrix-header">
+                                    <th>Student</th>
+                                </tr>
+                            </thead>
+                            <tbody id="full-matrix-body">
+                                <tr><td style="text-align:center;">Loading matrix...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 3.5: Staff Directory (Admin Only) -->
+            <div id="tab-staff-directory" class="tab-view" style="display:none;">
+                <div class="card">
+                    <div class="card-title">
+                        <span><i class="fa-solid fa-id-card-clip" style="color:var(--indigo);"></i> Staff Directory & Credentials</span>
+                        <button class="btn btn-primary" onclick="openEnrollStaffModal()" style="padding:6px 12px;">
+                            <i class="fa-solid fa-user-plus"></i> Enroll Staff Member
+                        </button>
+                    </div>
+
+                    <div class="form-group" style="margin-bottom:16px;">
+                        <input type="text" class="form-control" id="staff-search-input" placeholder="🔍 Search staff by ID, Name, Department, or Role..." oninput="filterStaffTable()">
+                    </div>
+
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th style="cursor:pointer;" onclick="sortStaffTable('staff_id')">Staff ID <i class="fa-solid fa-sort"></i></th>
+                                    <th style="cursor:pointer;" onclick="sortStaffTable('name')">Name <i class="fa-solid fa-sort"></i></th>
+                                    <th style="cursor:pointer;" onclick="sortStaffTable('department')">Department <i class="fa-solid fa-sort"></i></th>
+                                    <th style="cursor:pointer;" onclick="sortStaffTable('role')">Role <i class="fa-solid fa-sort"></i></th>
+                                    <th>PIN Code</th>
+                                    <th style="text-align:center;">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="staff-table-body">
+                                <tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Loading staff members directory...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 3.6: Staff Attendance Matrix -->
+            <div id="tab-staff-attendance" class="tab-view" style="display:none;">
+                <div class="card">
+                    <div class="card-title">
+                        <span><i class="fa-solid fa-clipboard-user" style="color:var(--emerald);"></i> Daily Staff Attendance Logs</span>
+                        <button class="btn btn-secondary" onclick="exportStaffExcel()" style="padding:6px 12px;">
+                            <i class="fa-solid fa-file-excel"></i> Export Staff Excel
+                        </button>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Staff Member</th>
+                                    <th>Department / Role</th>
+                                    <th>Check-In Time</th>
+                                    <th>Check-Out Time</th>
+                                    <th>Status</th>
+                                    <th>Remarks</th>
+                                </tr>
+                            </thead>
+                            <tbody id="staff-attendance-body">
+                                <tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Loading staff attendance logs...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div id="tab-students-directory" class="tab-view" style="display:none;">
+                <div class="card">
+                    <div class="card-title">
+                        <span><i class="fa-solid fa-users" style="color:var(--primary);"></i> Enrolled Students Directory</span>
+                        <button class="btn btn-primary" onclick="openEnrollModal()" style="padding:6px 12px;">
+                            <i class="fa-solid fa-user-plus"></i> Enroll Student
+                        </button>
+                    </div>
+
+                    <div class="form-group" style="margin-bottom:16px;">
+                        <input type="text" class="form-control" id="student-search-input" placeholder="🔍 Search students by ID, Name, or Department..." oninput="filterStudentsTable()">
+                    </div>
+
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th style="cursor:pointer;" onclick="sortStudentsTable('student_id')">Student ID <i class="fa-solid fa-sort"></i></th>
+                                    <th style="cursor:pointer;" onclick="sortStudentsTable('name')">Name <i class="fa-solid fa-sort"></i></th>
+                                    <th style="cursor:pointer;" onclick="sortStudentsTable('department')">Department <i class="fa-solid fa-sort"></i></th>
+                                    <th style="cursor:pointer;" onclick="sortStudentsTable('year')">Year <i class="fa-solid fa-sort"></i></th>
+                                    <th style="text-align:center;">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="students-table-body">
+                                <tr><td colspan="5" style="text-align:center; color:var(--text-muted);">Loading students directory...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 4: Timetable Customization & OCR Upload -->
+            <div id="tab-timetable-setup" class="tab-view" style="display:none;">
+                
+                <!-- OCR Timetable Photo Upload -->
+                <div class="card">
+                    <div class="card-title">
+                        <span><i class="fa-solid fa-file-image" style="color:var(--emerald);"></i> Timetable Photo OCR Auto-Fill</span>
+                    </div>
+                    <p style="font-size:12px; color:var(--text-muted); margin-bottom:14px;">Upload an image/photo of your timetable to automatically parse and pre-fill lecture slots!</p>
+                    
+                    <div style="display:flex; gap:12px; align-items:center;">
+                        <input type="file" id="timetable-ocr-file" accept="image/*" class="form-control" style="flex:1;">
+                        <button type="button" class="btn btn-secondary" onclick="processTimetableOcr()">
+                            <i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Fill Form
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Custom Timetable Slot Builder -->
+                <div class="card">
+                    <div class="card-title">
+                        <span><i class="fa-solid fa-calendar-days" style="color:var(--indigo);"></i> Custom Schedule Builder</span>
+                        <button type="button" class="btn btn-secondary" onclick="addTimetableSlotRow()" style="padding:6px 12px;">
+                            <i class="fa-solid fa-plus"></i> Add Slot
+                        </button>
+                    </div>
+
+                    <form id="form-timetable" onsubmit="saveTimetableSchedule(event)">
+                        <div id="timetable-slots-container">
+                            <!-- Rows injected dynamically -->
+                        </div>
+
+                        <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center; margin-top:16px;">
+                            <i class="fa-solid fa-floppy-disk"></i> Save Timetable Schedule
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- TAB 5: Unknown Faces Audit -->
+            <div id="tab-unknowns-view" class="tab-view" style="display:none;">
+                <div class="card">
+                    <div class="card-title">
+                        <span><i class="fa-solid fa-user-secret" style="color:var(--rose);"></i> Unrecognized Face Crops</span>
+                    </div>
+                    <div class="photo-grid" id="unknowns-grid">
+                        <p style="color:var(--text-muted);">No unknown face alerts logged for today.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 6: Admin Panel -->
+            <div id="tab-admin-view" class="tab-view" style="display:none;">
+                <div class="card">
+                    <div class="card-title">
+                        <span><i class="fa-solid fa-user-shield" style="color:var(--rose);"></i> Admin Controls & Activity Logs</span>
+                        <button class="btn btn-primary" onclick="openEnrollModal()">
+                            <i class="fa-solid fa-user-plus"></i> Enroll Student
+                        </button>
+                    </div>
+
+                    <h4 style="font-size:14px; font-weight:700; margin-bottom:10px;">Recent Staff Activity Logs</h4>
+                    <div class="table-responsive">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Staff Member</th>
+                                    <th>Action</th>
+                                    <th>Details</th>
+                                    <th>Timestamp</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-activity-body">
+                                <tr><td colspan="4" style="text-align:center;">Loading staff activity...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- Student Enrollment Modal -->
+    <div class="auth-overlay" id="modal-enroll" style="display:none;">
+        <div class="auth-card" style="max-width:480px; text-align:left;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                <h3 style="font-size:16px; font-weight:700;">Enroll New Student</h3>
+                <button onclick="closeEnrollModal()" style="background:none; border:none; color:var(--text-muted); font-size:20px;">&times;</button>
+            </div>
+
+            <div style="position:relative; width:100%; height:200px; background:#000; border-radius:var(--radius-md); overflow:hidden; margin-bottom:12px;">
+                <video id="enroll-video" autoplay playsinline style="width:100%; height:100%; object-fit:cover;"></video>
+                <img id="captured-preview" style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; display:none;">
+            </div>
+
+            <button type="button" class="btn btn-secondary" onclick="captureEnrollFrame()" style="width:100%; justify-content:center; margin-bottom:14px;">
+                <i class="fa-solid fa-camera"></i> Capture Frame
+            </button>
+
+            <form id="form-enroll" onsubmit="submitEnrollment(event)">
+                <input type="hidden" id="image_base64">
+                <div class="form-group">
+                    <label>Student ID:</label>
+                    <input type="text" class="form-control" id="enroll_student_id" placeholder="e.g. STU101" required>
+                </div>
+                <div class="form-group">
+                    <label>Full Name:</label>
+                    <input type="text" class="form-control" id="enroll_name" placeholder="e.g. John Doe" required>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                    <div class="form-group">
+                        <label>Department:</label>
+                        <input type="text" class="form-control" id="enroll_dept" placeholder="e.g. CS" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Year:</label>
+                        <input type="text" class="form-control" id="enroll_year" placeholder="e.g. FYP" required>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center; margin-top:10px;">
+                    <i class="fa-solid fa-save"></i> Save Encrypted Embedding
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Staff Enrollment Modal -->
+    <div class="auth-overlay" id="modal-enroll-staff" style="display:none;">
+        <div class="auth-card" style="max-width:480px; text-align:left;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                <h3 style="font-size:16px; font-weight:700;"><i class="fa-solid fa-user-plus" style="color:var(--primary);"></i> Enroll New Staff Member</h3>
+                <button onclick="closeEnrollStaffModal()" style="background:none; border:none; color:var(--text-muted); font-size:20px;">&times;</button>
+            </div>
+
+            <div style="position:relative; width:100%; height:180px; background:#000; border-radius:var(--radius-md); overflow:hidden; margin-bottom:12px;">
+                <video id="staff-enroll-video" autoplay playsinline style="width:100%; height:100%; object-fit:cover;"></video>
+                <img id="staff-captured-preview" style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; display:none;">
+            </div>
+
+            <button type="button" class="btn btn-secondary" onclick="captureEnrollStaffFrame()" style="width:100%; justify-content:center; margin-bottom:14px;">
+                <i class="fa-solid fa-camera"></i> Capture Face Frame (Optional)
+            </button>
+
+            <form id="form-enroll-staff" onsubmit="submitStaffEnrollment(event)">
+                <input type="hidden" id="staff_image_base64">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                    <div class="form-group">
+                        <label>Staff ID:</label>
+                        <input type="text" class="form-control" id="staff_enroll_id" placeholder="e.g. STF101" required>
+                    </div>
+                    <div class="form-group">
+                        <label>4-Digit Security PIN:</label>
+                        <input type="text" class="form-control" id="staff_enroll_pin" placeholder="e.g. 4321" maxlength="4" pattern="\d{4}" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Full Name:</label>
+                    <input type="text" class="form-control" id="staff_enroll_name" placeholder="e.g. Dr. Ramesh Kumar" required>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                    <div class="form-group">
+                        <label>Department:</label>
+                        <input type="text" class="form-control" id="staff_enroll_dept" placeholder="e.g. Computer Science" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Role:</label>
+                        <select class="form-control" id="staff_enroll_role">
+                            <option value="TEACHING">TEACHING FACULTY</option>
+                            <option value="NON_TEACHING">NON-TEACHING STAFF</option>
+                            <option value="ADMIN">ADMINISTRATOR</option>
+                        </select>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center; margin-top:10px;">
+                    <i class="fa-solid fa-user-check"></i> Save Staff Member Credentials
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Staff Edit Modal -->
+    <div class="auth-overlay" id="modal-edit-staff" style="display:none;">
+        <div class="auth-card" style="max-width:480px; text-align:left;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                <h3 style="font-size:16px; font-weight:700;"><i class="fa-solid fa-user-gear" style="color:var(--amber);"></i> Edit Staff Credentials</h3>
+                <button onclick="closeEditStaffModal()" style="background:none; border:none; color:var(--text-muted); font-size:20px;">&times;</button>
+            </div>
+
+            <form id="form-edit-staff" onsubmit="submitStaffUpdate(event)">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                    <div class="form-group">
+                        <label>Staff ID (Read-only):</label>
+                        <input type="text" class="form-control" id="staff_edit_id" readonly style="opacity:0.7;">
+                    </div>
+                    <div class="form-group">
+                        <label>New 4-Digit PIN Code:</label>
+                        <input type="text" class="form-control" id="staff_edit_pin" placeholder="Leave empty to keep" maxlength="4" pattern="\d{4}">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Full Name:</label>
+                    <input type="text" class="form-control" id="staff_edit_name" placeholder="Full Name" required>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                    <div class="form-group">
+                        <label>Department:</label>
+                        <input type="text" class="form-control" id="staff_edit_dept" placeholder="Department" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Role:</label>
+                        <select class="form-control" id="staff_edit_role">
+                            <option value="TEACHING">TEACHING FACULTY</option>
+                            <option value="NON_TEACHING">NON-TEACHING STAFF</option>
+                            <option value="ADMIN">ADMINISTRATOR</option>
+                        </select>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center; margin-top:10px;">
+                    <i class="fa-solid fa-floppy-disk"></i> Save Staff Changes
+                </button>
+            </form>
+        </div>
+    </div>
+    <div class="auth-overlay" id="modal-edit-student" style="display:none;">
+        <div class="auth-card" style="max-width:480px; text-align:left;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                <h3 style="font-size:16px; font-weight:700;"><i class="fa-solid fa-user-pen" style="color:var(--amber);"></i> Edit Student & Face Embedding</h3>
+                <button onclick="closeEditStudentModal()" style="background:none; border:none; color:var(--text-muted); font-size:20px;">&times;</button>
+            </div>
+
+            <div style="position:relative; width:100%; height:200px; background:#000; border-radius:var(--radius-md); overflow:hidden; margin-bottom:12px;">
+                <video id="edit-video" autoplay playsinline style="width:100%; height:100%; object-fit:cover;"></video>
+                <img id="edit-captured-preview" style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; display:none;">
+            </div>
+
+            <button type="button" class="btn btn-secondary" onclick="captureEditFrame()" style="width:100%; justify-content:center; margin-bottom:14px;">
+                <i class="fa-solid fa-camera"></i> Re-Capture New Face Frame (Optional)
+            </button>
+
+            <form id="form-edit-student" onsubmit="submitStudentUpdate(event)">
+                <input type="hidden" id="edit_image_base64">
+                <div class="form-group">
+                    <label>Student ID (Read-only):</label>
+                    <input type="text" class="form-control" id="edit_student_id" readonly style="opacity:0.7;">
+                </div>
+                <div class="form-group">
+                    <label>Full Name:</label>
+                    <input type="text" class="form-control" id="edit_name" placeholder="Full Name" required>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                    <div class="form-group">
+                        <label>Department:</label>
+                        <input type="text" class="form-control" id="edit_dept" placeholder="Department" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Year:</label>
+                        <input type="text" class="form-control" id="edit_year" placeholder="Year" required>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center; margin-top:10px;">
+                    <i class="fa-solid fa-floppy-disk"></i> Update Profile & Embedding
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Site-Native Toast Notification Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Site-Native Confirmation Modal -->
+    <div class="auth-overlay" id="modal-confirm" style="display:none; z-index:9990;">
+        <div class="auth-card" style="max-width:400px; text-align:center;">
+            <div style="width:48px; height:48px; border-radius:50%; background:rgba(244,63,94,0.15); color:var(--rose); display:flex; align-items:center; justify-content:center; margin:0 auto 12px; font-size:22px;">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+            </div>
+            <h3 id="confirm-modal-title" style="font-size:16px; font-weight:700; margin-bottom:6px;">Confirm Action</h3>
+            <p id="confirm-modal-text" style="font-size:13px; color:var(--text-muted); margin-bottom:20px; line-height:1.4;"></p>
+
+            <div style="display:flex; gap:10px;">
+                <button type="button" class="btn btn-secondary" id="confirm-btn-cancel" style="flex:1; justify-content:center;">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirm-btn-action" style="flex:1; justify-content:center;">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- PWA Registration -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW failed:', err));
+        }
+    </script>
+    <script type="module" src="/web/js/app.js?v=4.1"></script>
+</body>
+</html>

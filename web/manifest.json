@@ -1,0 +1,21 @@
+{
+  "short_name": "Attendance",
+  "name": "Smart Attendance System",
+  "icons": [
+    {
+      "src": "/web/css/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "/web/css/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/web/index.html",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "display": "standalone",
+  "orientation": "portrait"
+}

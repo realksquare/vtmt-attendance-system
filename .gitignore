@@ -1,0 +1,22 @@
+# Python & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Databases & Encryption Secrets
+database/*.db
+database/*.sqlite3
+keys/secret.key
+
+# Storage & Temporary Files
+storage/
+exports/
+logs/
+unknown_faces/
+
+# IDE & OS Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
