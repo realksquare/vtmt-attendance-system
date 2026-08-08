@@ -1197,50 +1197,49 @@ async function _populateBurstSlotSelect() {
 }
 
 /* Explicit Global Window Bindings for ES Module Compatibility */
-Object.assign(window, {
-    pressPin,
-    clearPin,
-    submitPin,
-    logout,
-    openEnrollModal,
-    closeEnrollModal,
-    captureEnrollFrame,
-    submitEnrollment,
-    openEnrollStaffModal,
-    closeEnrollStaffModal,
-    captureEnrollStaffFrame,
-    submitStaffEnrollment,
-    openEditStaffModal,
-    closeEditStaffModal,
-    captureEditStaffFrame,
-    deleteStaffMember,
-    editStudentProfile,
-    closeEditStudentModal,
-    captureEditFrame,
-    submitStudentUpdate,
-    confirmDeleteStudent,
-    sortStudentsTable,
-    addTimetableSlotRow,
-    removeTimetableSlotRow,
-    saveTimetableSchedule,
-    processTimetableOcr,
-    submitStaffOverride,
-    exportExcel,
-    refreshAdminStats,
-    adminStartScheduler,
-    adminStopScheduler,
-    adminTriggerBurst,
-    adminClearTodayAttendance,
-    adminClearTodayUnknowns,
-    switchTab,
-    renderStaffHourView,
-    renderFullMatrix,
-    renderStudentsDirectory,
-    renderStaffDirectory,
-    renderStaffAttendance,
-    renderTimetableSetup,
-    renderUnknowns,
-    renderAdminPanel
-});
+window.pressPin = pressPin;
+window.clearPin = clearPin;
+window.submitPin = submitPin;
+window.logout = logout;
+window.openEnrollModal = openEnrollModal;
+window.closeEnrollModal = closeEnrollModal;
+window.captureEnrollFrame = captureEnrollFrame;
+window.submitEnrollment = submitEnrollment;
+window.openEnrollStaffModal = openEnrollStaffModal;
+window.closeEnrollStaffModal = closeEnrollStaffModal;
+window.captureEnrollStaffFrame = captureEnrollStaffFrame;
+window.submitStaffEnrollment = submitStaffEnrollment;
+window.openEditStaffModal = openEditStaffModal;
+window.closeEditStaffModal = closeEditStaffModal;
+window.submitStaffUpdate = submitStaffUpdate;
+window.deleteStaffMember = deleteStaffMember;
+window.editStudentProfile = editStudentProfile;
+window.closeEditStudentModal = closeEditStudentModal;
+window.captureEditFrame = captureEditFrame;
+window.submitStudentUpdate = submitStudentUpdate;
+window.confirmDeleteStudent = confirmDeleteStudent;
+window.sortStudentsTable = sortStudentsTable;
+window.addTimetableSlotRow = addTimetableSlotRow;
+window.removeTimetableSlotRow = removeTimetableSlotRow;
+window.saveTimetableSchedule = saveTimetableSchedule;
+window.processTimetableOcr = processTimetableOcr;
+window.submitStaffOverride = submitStaffOverride;
+window.exportExcel = exportExcel;
+window.refreshAdminStats = refreshAdminStats;
+window.adminStartScheduler = adminStartScheduler;
+window.adminStopScheduler = adminStopScheduler;
+window.adminTriggerBurst = adminTriggerBurst;
+window.adminClearTodayAttendance = adminClearTodayAttendance;
+window.adminClearTodayUnknowns = adminClearTodayUnknowns;
+window.switchTab = switchTab;
+window.renderStaffHourView = renderStaffHourView;
+window.renderFullMatrix = renderFullMatrix;
+window.renderStudentsDirectory = renderStudentsDirectory;
+window.renderStaffDirectory = renderStaffDirectory;
+window.renderStaffAttendance = renderStaffAttendance;
+window.renderTimetableSetup = renderTimetableSetup;
+window.renderUnknowns = renderUnknowns;
+window.renderAdminPanel = renderAdminPanel;
+
 
 
