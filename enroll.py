@@ -78,8 +78,18 @@ def enroll_student_webcam(recognizer: FaceRecognizer):
         key_press = cv2.waitKey(1) & 0xFF
 
         if key_press == ord(' ') and len(faces) == 1:
+            quality_res = recognizer.quality_analyzer.assess_frame(frame, faces)
+            if not quality_res.passed:
+                print(f"\n[ENROLLMENT REJECTED]: {quality_res.reason}")
+                continue
+
+            pad_res = recognizer.pad_engine.verify(frame, faces[0].bbox)
+            if not pad_res.passed:
+                print(f"\n[ENROLLMENT REJECTED]: Anti-Spoofing Alert - {pad_res.reason} (Score: {pad_res.score:.2f})")
+                continue
+
             captured_embedding = faces[0].embedding
-            print("Face captured successfully!")
+            print("\nFace captured & verified as genuine live physical presentation!")
             break
         elif key_press == ord('q'):
             print("Enrollment cancelled.")

@@ -3,21 +3,27 @@ Face Detection and Embedding Extraction Module using InsightFace.
 Also calculates Cosine Similarity between face embeddings.
 """
 
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Optional, Any
 import numpy as np
 import cv2
 import insightface
 from insightface.app import FaceAnalysis
 from config import INSIGHTFACE_MODEL_NAME, MATCH_THRESHOLD
+from liveness.pad_engine import AntiSpoofEngine, PADResult
+from liveness.quality import FaceQualityAnalyzer, QualityResult
 
 
 class FaceRecognizer:
     def __init__(self, name: str = INSIGHTFACE_MODEL_NAME):
-        """Initialize InsightFace Analysis model."""
+        """Initialize InsightFace Analysis model and Anti-Spoofing engine."""
         print(f"Loading InsightFace model ({name})...")
         self.app = FaceAnalysis(name=name, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         self.app.prepare(ctx_id=0, det_size=(640, 640))
         print("InsightFace model loaded successfully!")
+
+        self.pad_engine = AntiSpoofEngine()
+        self.quality_analyzer = FaceQualityAnalyzer()
+
 
     def detect_and_embed(self, frame: np.ndarray):
         """
@@ -238,6 +244,49 @@ class FaceRecognizer:
             print(f"[PAD] Liveness verification error: {err}")
             return True, 100.0, "Fallback"
 
+    def verify_face(
+        self,
+        full_frame: np.ndarray,
+        face_obj: Any,
+        registered_templates: list,
+        require_challenge: bool = False,
+        challenge_controller: Optional[Any] = None
+    ):
+        """
+        Executes full multi-stage verification pipeline: Quality -> PAD -> Recognition -> Decision.
+        Returns VerificationResult.
+        """
+        from liveness.verification import DecisionEngine
+
+        bbox = getattr(face_obj, "bbox", None)
+        if bbox is None and isinstance(face_obj, dict):
+            bbox = face_obj.get("bbox")
+
+        # 1. Quality Analysis
+        quality_res = self.quality_analyzer.assess_frame(full_frame, [face_obj])
+
+        # 2. Passive PAD
+        pad_res = self.pad_engine.verify(full_frame, bbox) if bbox is not None else None
+
+        # 3. Recognition Matching
+        embedding = getattr(face_obj, "embedding", None)
+        if embedding is None and isinstance(face_obj, dict):
+            embedding = face_obj.get("embedding")
+
+        rec_match = self.find_match(embedding, registered_templates, threshold=MATCH_THRESHOLD) if embedding is not None else (None, "Unknown", 0.0)
+
+        # 4. Challenge State
+        challenge_state = challenge_controller.state if challenge_controller else None
+
+        # 5. Final Decision Gate
+        return DecisionEngine.evaluate(
+            quality_res=quality_res,
+            pad_res=pad_res,
+            recognition_match=rec_match,
+            challenge_state=challenge_state,
+            require_challenge=require_challenge
+        )
+
     def find_match(self, target_embedding: np.ndarray, registered_templates: list, threshold: float = MATCH_THRESHOLD):
         """
         Matches target embedding against decrypted templates in memory.
@@ -259,3 +308,4 @@ class FaceRecognizer:
             return best_match
         else:
             return (None, "Unknown", float(best_score))
+

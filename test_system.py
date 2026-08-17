@@ -153,6 +153,143 @@ def test_manual_override():
     print("[OK] Staff Manual Override PASSED!")
 
 
+def test_pad_engine_and_aggregator():
+    print("Testing MiniFASNet ONNX PAD Engine & Multi-Frame Aggregator...")
+    from liveness.pad_engine import AntiSpoofEngine, MultiFramePADAggregator
+
+    engine = AntiSpoofEngine()
+    dummy_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    dummy_bbox = np.array([200, 100, 440, 380])
+
+    # 1. Flat dummy surface -> PAD score should be low
+    score, details = engine.predict_single(dummy_frame, dummy_bbox)
+    assert score < 0.65, f"Flat surface should have low live score, got {score}"
+
+    # 2. Multi-Frame Aggregator
+    aggregator = MultiFramePADAggregator(min_samples=5, threshold=0.65)
+    for _ in range(4):
+        aggregator.add_sample(0.85)
+    # Insufficient samples check
+    res_incomplete = aggregator.evaluate()
+    assert not res_incomplete.passed, "Aggregator must fail when sample count < min_samples"
+
+    # Add 5th sample (all high) -> should pass
+    aggregator.add_sample(0.88)
+    res_complete = aggregator.evaluate()
+    assert res_complete.passed, f"Aggregator should pass with 5 valid samples, got {res_complete.score}"
+    assert abs(res_complete.score - 0.85) < 0.05, f"Expected median ~0.85, got {res_complete.score}"
+
+    print("[OK] MiniFASNet PAD Engine & Multi-Frame Aggregator PASSED!")
+
+
+def test_quality_analyzer():
+    print("Testing Face Quality Analyzer...")
+    from liveness.quality import FaceQualityAnalyzer
+
+    analyzer = FaceQualityAnalyzer()
+    dummy_frame = np.full((480, 640, 3), 120, dtype=np.uint8)
+
+    # 1. No face
+    res_noface = analyzer.assess_frame(dummy_frame, [])
+    assert not res_noface.passed and "No face" in res_noface.reason, f"Expected no face, got {res_noface.reason}"
+
+    # 2. Multiple faces
+    res_multiface = analyzer.assess_frame(dummy_frame, [{"bbox": [10, 10, 50, 50]}, {"bbox": [60, 60, 100, 100]}])
+    assert not res_multiface.passed and "Multiple faces" in res_multiface.reason, f"Expected multiple faces, got {res_multiface.reason}"
+
+    # 3. Face too small
+    res_small = analyzer.assess_frame(dummy_frame, [{"bbox": [50, 50, 65, 65]}])
+    assert not res_small.passed and "too small" in res_small.reason, f"Expected small face, got {res_small.reason}"
+
+    # 4. Blur / Flat face crop (Laplacian variance near 0)
+    flat_frame = np.full((480, 640, 3), 128, dtype=np.uint8)
+    res_blur = analyzer.assess_frame(flat_frame, [{"bbox": [150, 100, 350, 300]}])
+    assert not res_blur.passed and "blurry" in res_blur.reason.lower(), f"Expected blur rejection, got {res_blur.reason}"
+
+    print("[OK] Face Quality Analyzer PASSED!")
+
+
+def test_challenge_controller():
+    print("Testing Active Liveness Challenge Controller...")
+    from liveness.challenge import LivenessChallengeController, ChallengeAction, ChallengeState
+
+    controller = LivenessChallengeController(action_count=2, per_action_timeout=2.0, total_timeout=5.0)
+    actions = controller.start_session(explicit_actions=[ChallengeAction.TURN_LEFT, ChallengeAction.BLINK])
+    assert len(actions) == 2, "Session should initialize with 2 actions"
+    assert controller.state == ChallengeState.WAITING_FOR_ACTION
+
+    # 1. Process neutral baseline
+    dummy_face = {"pose": np.array([0.0, 0.0, 0.0]), "landmark_2d_106": np.zeros((106, 2))}
+    state, prompt = controller.process_frame(dummy_face)
+    assert state == ChallengeState.WAITING_FOR_ACTION
+
+    # 2. Simulate Turn Left (relative yaw > 12.0 for 2 frames)
+    turn_left_face = {"pose": np.array([0.0, 16.0, 0.0]), "landmark_2d_106": np.zeros((106, 2))}
+    controller.process_frame(turn_left_face)
+    state, _ = controller.process_frame(turn_left_face)
+
+    # First action completed! Next action is BLINK
+    assert controller.get_current_action() == ChallengeAction.BLINK
+
+    # 3. Simulate Blink sequence (WAIT_OPEN -> OPEN_READY -> CLOSED -> REOPENED)
+    # EAR > 0.23 (Open)
+    open_landmarks = np.zeros((106, 2))
+    open_landmarks[35] = [0, 0]; open_landmarks[39] = [20, 0]; open_landmarks[43] = [10, 6]; open_landmarks[47] = [10, 0]
+    open_landmarks[89] = [0, 0]; open_landmarks[93] = [20, 0]; open_landmarks[101] = [10, 6]; open_landmarks[105] = [10, 0]
+    blink_open_face = {"pose": np.array([0.0, 0.0, 0.0]), "landmark_2d_106": open_landmarks}
+    controller.process_frame(blink_open_face)
+
+    # EAR < 0.19 (Closed)
+    closed_landmarks = np.zeros((106, 2))
+    closed_landmarks[35] = [0, 0]; closed_landmarks[39] = [20, 0]; closed_landmarks[43] = [10, 2]; closed_landmarks[47] = [10, 0]
+    closed_landmarks[89] = [0, 0]; closed_landmarks[93] = [20, 0]; closed_landmarks[101] = [10, 2]; closed_landmarks[105] = [10, 0]
+    blink_closed_face = {"pose": np.array([0.0, 0.0, 0.0]), "landmark_2d_106": closed_landmarks}
+    controller.process_frame(blink_closed_face)
+
+    # EAR > 0.23 (Reopened for 2 frames)
+    controller.process_frame(blink_open_face)
+    final_state, _ = controller.process_frame(blink_open_face)
+
+    assert final_state == ChallengeState.COMPLETED, f"Expected COMPLETED, got {final_state}"
+    print("[OK] Active Liveness Challenge Controller PASSED!")
+
+
+def test_decision_engine_fail_closed():
+    print("Testing Fail-Closed Security Decision Gate...")
+    from liveness.verification import DecisionEngine, ReasonCode
+    from liveness.quality import QualityResult
+    from liveness.pad_engine import PADResult
+    from liveness.challenge import ChallengeState
+
+    # Gate 1: All pass -> Authorized
+    q_pass = QualityResult(passed=True, reason="OK")
+    pad_pass = PADResult(passed=True, score=0.92, reason="OK")
+    rec_pass = ("STU101", "Alice", 0.88)
+    res = DecisionEngine.evaluate(q_pass, pad_pass, rec_pass, require_challenge=False)
+    assert res.authorized, "All gates pass -> Must authorize"
+    assert res.reason_code == ReasonCode.SUCCESS
+
+    # Gate 2: High recognition similarity (0.99) with PAD failure -> MUST FAIL CLOSED
+    pad_fail = PADResult(passed=False, score=0.20, reason="Phone photo spoof detected")
+    rec_high = ("STU101", "Alice", 0.99)
+    res_spoof = DecisionEngine.evaluate(q_pass, pad_fail, rec_high, require_challenge=False)
+    assert not res_spoof.authorized, "PAD failure with 0.99 similarity MUST be rejected"
+    assert res_spoof.reason_code == ReasonCode.PAD_SPOOF
+
+    # Gate 3: Quality failure -> MUST FAIL CLOSED
+    q_fail = QualityResult(passed=False, reason="Multiple faces detected")
+    res_qual = DecisionEngine.evaluate(q_fail, pad_pass, rec_pass, require_challenge=False)
+    assert not res_qual.authorized, "Quality failure MUST be rejected"
+    assert res_qual.reason_code == ReasonCode.MULTIPLE_FACES
+
+    # Gate 4: Challenge required but not completed -> MUST FAIL CLOSED
+    res_chal = DecisionEngine.evaluate(q_pass, pad_pass, rec_pass, challenge_state=ChallengeState.WAITING_FOR_ACTION, require_challenge=True)
+    assert not res_chal.authorized, "Incomplete challenge MUST be rejected"
+    assert res_chal.reason_code == ReasonCode.CHALLENGE_FAILED
+
+    print("[OK] Fail-Closed Security Decision Gate PASSED!")
+
+
 def run_all_tests():
     print("\n" + "="*60)
     print("     RUNNING UPDATED SYSTEM INTEGRATION TESTS")
@@ -160,6 +297,10 @@ def run_all_tests():
     test_aes_roundtrip()
     test_cosine_similarity()
     test_anti_spoof_liveness()
+    test_pad_engine_and_aggregator()
+    test_quality_analyzer()
+    test_challenge_controller()
+    test_decision_engine_fail_closed()
     test_tri_window_attendance()
     test_unknown_face_logging()
     test_manual_override()
@@ -170,3 +311,4 @@ def run_all_tests():
 
 if __name__ == "__main__":
     run_all_tests()
+

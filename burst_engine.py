@@ -86,28 +86,28 @@ def run_burst_capture(
                 box = face.bbox.astype(int)
                 embedding = face.embedding
 
-                # Anti-Spoofing Liveness Check: Reject phone screens & printed photos
-                h, w, _ = frame.shape
-                x1, y1, x2, y2 = max(0, box[0]), max(0, box[1]), min(w, box[2]), min(h, box[3])
-                crop = frame[y1:y2, x1:x2]
+                # Full Fail-Closed Pipeline: Quality -> MiniFASNet PAD -> Recognition -> Decision Gate
+                res = recognizer.verify_face(frame, face, templates, require_challenge=False)
 
-                is_live, liveness_score, reason = recognizer.verify_liveness(crop, face, frame)
-                if not is_live:
-                    print(f"  -> [{window} ANTI-SPOOF REJECTED]: {reason} (Score: {liveness_score:.1f})")
-                    cached_face_overlays.append((box, f"SPOOF: {reason}", (0, 0, 255)))
+                if not res.quality_passed:
+                    cached_face_overlays.append((box, f"QUALITY: {res.message}", (0, 165, 255)))
                     continue
 
-                student_id, name, score = recognizer.find_match(embedding, templates, threshold=MATCH_THRESHOLD)
+                if not res.pad_passed:
+                    print(f"  -> [{window} ANTI-SPOOF REJECTED]: {res.reason_code} | {res.message} (Score: {res.pad_score:.2f})")
+                    cached_face_overlays.append((box, f"SPOOF: {res.message}", (0, 0, 255)))
+                    continue
 
-                if student_id:
-                    # Recognized student
-                    marked = record_window_attendance(student_id, slot_id, window, score)
+                if res.authorized and res.identity:
+                    # Recognized student with verified live presentation
+                    marked = record_window_attendance(res.identity, slot_id, window, res.recognition_score)
                     if marked:
-                        print(f"  -> [{window} RECOGNIZED]: {name} ({student_id}) | Confidence: {score:.2f}")
-                    cached_face_overlays.append((box, f"{name} ({score:.2f})", (0, 255, 0)))
+                        print(f"  -> [{window} RECOGNIZED & LIVE]: {res.student_name} ({res.identity}) | Conf: {res.recognition_score:.2f} | PAD: {res.pad_score:.2f}")
+                    cached_face_overlays.append((box, f"{res.student_name} ({res.recognition_score:.2f})", (0, 255, 0)))
                 else:
                     # Unrecognized face logic with boundary completeness check and deduplication
                     h, w, _ = frame.shape
+                    score = res.recognition_score
                     box_w = box[2] - box[0]
                     box_h = box[3] - box[1]
 

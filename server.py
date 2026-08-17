@@ -269,19 +269,13 @@ def update_student(student_id: str, req: StudentUpdateRequest):
                 raise HTTPException(status_code=400, detail="Could not decode re-captured image frame.")
 
             faces = rec.detect_and_embed(frame)
-            if len(faces) == 0:
-                raise HTTPException(status_code=400, detail="No face detected in re-captured image.")
-            elif len(faces) > 1:
-                raise HTTPException(status_code=400, detail="Multiple faces detected. Keep only ONE face in frame.")
+            quality_res = rec.quality_analyzer.assess_frame(frame, faces)
+            if not quality_res.passed:
+                raise HTTPException(status_code=400, detail=quality_res.reason)
 
-            box = faces[0].bbox.astype(int)
-            h, w, _ = frame.shape
-            x1, y1, x2, y2 = max(0, box[0]), max(0, box[1]), min(w, box[2]), min(h, box[3])
-            crop = frame[y1:y2, x1:x2]
-
-            is_live, liveness_score, reason = rec.verify_liveness(crop, faces[0], frame)
-            if not is_live:
-                raise HTTPException(status_code=400, detail=f"Anti-Spoofing Alert: {reason}. Please position a live 3D face in front of the camera.")
+            pad_res = rec.pad_engine.verify(frame, faces[0].bbox)
+            if not pad_res.passed:
+                raise HTTPException(status_code=400, detail=f"Anti-Spoofing Alert: {pad_res.reason} (Score: {pad_res.score:.2f})! Please position a live physical face.")
 
             new_embedding = faces[0].embedding
         except HTTPException as he:
@@ -308,7 +302,7 @@ def update_student(student_id: str, req: StudentUpdateRequest):
 
 @app.post("/api/students/enroll")
 def enroll_student(req: StudentEnrollRequest):
-    """Enroll new student via base64 webcam frame."""
+    """Enroll new student via base64 webcam frame with Quality & PAD gate."""
     rec = get_recognizer_instance()
     key = get_or_create_key()
 
@@ -325,19 +319,13 @@ def enroll_student(req: StudentEnrollRequest):
             raise HTTPException(status_code=400, detail="Could not decode image frame.")
 
         faces = rec.detect_and_embed(frame)
-        if len(faces) == 0:
-            raise HTTPException(status_code=400, detail="No face detected. Center your face clearly.")
-        elif len(faces) > 1:
-            raise HTTPException(status_code=400, detail="Multiple faces detected. Keep only ONE face in frame.")
+        quality_res = rec.quality_analyzer.assess_frame(frame, faces)
+        if not quality_res.passed:
+            raise HTTPException(status_code=400, detail=quality_res.reason)
 
-        box = faces[0].bbox.astype(int)
-        h, w, _ = frame.shape
-        x1, y1, x2, y2 = max(0, box[0]), max(0, box[1]), min(w, box[2]), min(h, box[3])
-        crop = frame[y1:y2, x1:x2]
-
-        is_live, liveness_score, reason = rec.verify_liveness(crop, faces[0], frame)
-        if not is_live:
-            raise HTTPException(status_code=400, detail=f"Anti-Spoofing Alert: {reason}! Please position a live 3D face in front of the camera.")
+        pad_res = rec.pad_engine.verify(frame, faces[0].bbox)
+        if not pad_res.passed:
+            raise HTTPException(status_code=400, detail=f"Anti-Spoofing Alert: {pad_res.reason} (Score: {pad_res.score:.2f})! Please position a live physical face.")
 
         embedding = faces[0].embedding
         success = add_student_with_embedding(
@@ -385,13 +373,14 @@ def enroll_staff_member(req: StaffEnrollRequest):
             if frame is not None:
                 faces = rec.detect_and_embed(frame)
                 if len(faces) > 0:
-                    box = faces[0].bbox.astype(int)
-                    h, w, _ = frame.shape
-                    x1, y1, x2, y2 = max(0, box[0]), max(0, box[1]), min(w, box[2]), min(h, box[3])
-                    crop = frame[y1:y2, x1:x2]
-                    is_live, liveness_score, reason = rec.verify_liveness(crop, faces[0], frame)
-                    if not is_live:
-                        raise HTTPException(status_code=400, detail=f"Anti-Spoofing Alert: {reason}! Please position a live 3D face in front of the camera.")
+                    quality_res = rec.quality_analyzer.assess_frame(frame, faces)
+                    if not quality_res.passed:
+                        raise HTTPException(status_code=400, detail=quality_res.reason)
+
+                    pad_res = rec.pad_engine.verify(frame, faces[0].bbox)
+                    if not pad_res.passed:
+                        raise HTTPException(status_code=400, detail=f"Anti-Spoofing Alert: {pad_res.reason} (Score: {pad_res.score:.2f})! Please position a live physical face.")
+
                     embedding = faces[0].embedding
         except HTTPException as he:
             raise he

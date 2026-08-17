@@ -14,14 +14,28 @@ EXPORTS_DIR = os.path.join(BASE_DIR, "exports")
 STORAGE_DIR = os.path.join(BASE_DIR, "storage")
 UNKNOWNS_DIR = os.path.join(STORAGE_DIR, "unknowns")
 
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+
 # Ensure required directories exist
-for directory in [KEYS_DIR, DB_DIR, LOGS_DIR, EXPORTS_DIR, STORAGE_DIR, UNKNOWNS_DIR]:
+for directory in [KEYS_DIR, DB_DIR, LOGS_DIR, EXPORTS_DIR, STORAGE_DIR, UNKNOWNS_DIR, MODELS_DIR]:
     os.makedirs(directory, exist_ok=True)
 
 # Security & DB
 SECRET_KEY_PATH = os.path.join(KEYS_DIR, "secret.key")
 DB_PATH = os.path.join(DB_DIR, "attendance.db")
 DATABASE_URL = f"sqlite:///{DB_PATH}"
+
+# Anti-Spoofing & Liveness Settings
+PAD_MODEL_V2_PATH = os.path.join(MODELS_DIR, "2.7_80x80_MiniFASNetV2.onnx")
+PAD_MODEL_V1SE_PATH = os.path.join(MODELS_DIR, "4_0_0_80x80_MiniFASNetV1SE.onnx")
+PAD_SCORE_THRESHOLD = 0.65  # Minimum genuine probability threshold for MiniFASNet
+PAD_MIN_VALID_SAMPLES = 5   # Minimum multi-frame aggregated samples
+QUALITY_MIN_FACE_AREA_RATIO = 0.025  # Minimum face/frame area ratio
+QUALITY_BLUR_THRESHOLD = 15.0        # Minimum Laplacian variance
+CHALLENGE_PER_ACTION_TIMEOUT = 3.5  # Seconds per active challenge action
+CHALLENGE_TOTAL_TIMEOUT = 10.0      # Total session timeout in seconds
+CHALLENGE_ACTION_COUNT = 2          # Number of actions per active challenge session
+
 
 # Face Recognition Settings
 INSIGHTFACE_MODEL_NAME = "buffalo_l"

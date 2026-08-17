@@ -48,29 +48,23 @@ def run_live_attendance(recognizer: FaceRecognizer):
 
         for face in faces:
             box = face.bbox.astype(int)
-            embedding = face.embedding
+            res = recognizer.verify_face(frame, face, templates, require_challenge=False)
 
-            # Extract face crop for liveness verification
-            h, w, _ = frame.shape
-            x1, y1, x2, y2 = max(0, box[0]), max(0, box[1]), min(w, box[2]), min(h, box[3])
-            crop = frame[y1:y2, x1:x2]
-
-            is_live, liveness_score, reason = recognizer.verify_liveness(crop, face, frame)
-            if not is_live:
-                label = f"SPOOF: {reason}"
-                color = (0, 0, 255) # Red warning for fake face / screen photo
+            if not res.quality_passed:
+                label = f"QUALITY: {res.message}"
+                color = (0, 165, 255) # Orange warning for quality
+            elif not res.pad_passed:
+                label = f"SPOOF: {res.message}"
+                color = (0, 0, 255) # Red warning for spoof
+            elif res.authorized and res.identity:
+                label = f"{res.student_name} ({res.recognition_score:.2f})"
+                color = (0, 255, 0)  # Green for authorized live face
+                marked = record_attendance(res.identity, res.recognition_score)
+                if marked:
+                    print(f"ATTENDANCE MARKED: {res.student_name} ({res.identity}) | Confidence: {res.recognition_score:.2f}")
             else:
-                student_id, name, sim_score = recognizer.find_match(embedding, templates, threshold=MATCH_THRESHOLD)
-
-                if student_id:
-                    label = f"{name} ({sim_score:.2f})"
-                    color = (0, 255, 0)  # Green for recognized live face
-                    marked = record_attendance(student_id, sim_score)
-                    if marked:
-                        print(f"ATTENDANCE MARKED: {name} ({student_id}) | Confidence: {sim_score:.2f}")
-                else:
-                    label = f"Unknown ({sim_score:.2f})"
-                    color = (0, 165, 255)  # Orange for unknown live face
+                label = f"Unknown ({res.recognition_score:.2f})"
+                color = (0, 165, 255)
 
             # Draw bounding box & label
             cv2.rectangle(display_frame, (box[0], box[1]), (box[2], box[3]), color, 2)
