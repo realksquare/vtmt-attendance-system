@@ -877,18 +877,24 @@ class BurstTriggerRequest(BaseModel):
 
 
 @app.post("/api/admin/burst/test")
-def trigger_test_burst(req: BurstTriggerRequest, background_tasks: BackgroundTasks):
+def trigger_test_burst(req: BurstTriggerRequest):
     """Trigger an instant demo burst capture session from Admin Panel."""
+    import threading
     rec = get_recognizer_instance()
-    background_tasks.add_task(
-        run_burst_capture,
-        recognizer=rec,
-        slot_id=req.slot_id,
-        window=req.window,
-        duration_seconds=req.duration_seconds,
-        show_window=True
+    t = threading.Thread(
+        target=run_burst_capture,
+        kwargs={
+            "recognizer": rec,
+            "slot_id": req.slot_id,
+            "window": req.window,
+            "duration_seconds": req.duration_seconds,
+            "show_window": True
+        },
+        daemon=True
     )
+    t.start()
     return {"status": "started", "message": f"Test burst ({req.window}) triggered for {req.duration_seconds}s on slot '{req.slot_id}'."}
+
 
 
 @app.delete("/api/admin/attendance/clear-today")

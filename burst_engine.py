@@ -48,8 +48,12 @@ def run_burst_capture(
     slot_unknown_dir = os.path.join(UNKNOWNS_DIR, today_str, slot_id, window)
     os.makedirs(slot_unknown_dir, exist_ok=True)
 
-    # Optimize camera capture with DirectShow and MJPEG compression for smooth FPS
+    # Optimize camera capture with DirectShow and fallback to standard backend
     cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    if not cap.isOpened():
+        cap.release()
+        cap = cv2.VideoCapture(0)
+
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
@@ -59,22 +63,38 @@ def run_burst_capture(
         print(f"ERROR [{window}]: Could not open webcam.")
         return
 
-    start_time = time.time()
+    window_name = f"Smart Attendance - Burst ({window})"
+    if show_window:
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, FRAME_WIDTH, FRAME_HEIGHT)
+        try:
+            cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1)
+        except Exception:
+            pass
+
+    start_time = None
     last_sample_time = 0.0
     unknown_counter = 0
     cached_face_overlays = []
     saved_unknown_embeddings_in_window = []
 
-    while (time.time() - start_time) < duration_seconds:
+    while True:
         ret, frame = cap.read()
         if not ret:
             print(f"Warning [{window}]: Failed to grab frame.")
-            time.sleep(0.1)
+            time.sleep(0.05)
             continue
 
+        if start_time is None:
+            start_time = time.time()
+
         current_time = time.time()
+        elapsed = current_time - start_time
+        if elapsed >= duration_seconds:
+            break
+
         display_frame = frame.copy()
-        remaining_sec = int(duration_seconds - (current_time - start_time))
+        remaining_sec = max(0, int(duration_seconds - elapsed))
 
         # Sample frame at configured interval (e.g. every 0.5s) while keeping UI at 30 FPS
         if (current_time - last_sample_time) >= BURST_SAMPLE_INTERVAL_SEC:
