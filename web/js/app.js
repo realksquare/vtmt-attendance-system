@@ -1212,7 +1212,9 @@ window.submitStaffEnrollment = submitStaffEnrollment;
 window.openEditStaffModal = openEditStaffModal;
 window.closeEditStaffModal = closeEditStaffModal;
 window.submitStaffUpdate = submitStaffUpdate;
-window.deleteStaffMember = deleteStaffMember;
+window.confirmDeleteStaff = confirmDeleteStaff;
+window.sortStaffTable = sortStaffTable;
+window.exportStaffExcel = exportStaffExcel;
 window.editStudentProfile = editStudentProfile;
 window.closeEditStudentModal = closeEditStudentModal;
 window.captureEditFrame = captureEditFrame;
@@ -1240,6 +1242,7 @@ window.renderStaffAttendance = renderStaffAttendance;
 window.renderTimetableSetup = renderTimetableSetup;
 window.renderUnknowns = renderUnknowns;
 window.renderAdminPanel = renderAdminPanel;
+
 
 
 
