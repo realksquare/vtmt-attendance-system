@@ -76,8 +76,8 @@ def run_burst_capture(
         display_frame = frame.copy()
         remaining_sec = int(duration_seconds - (current_time - start_time))
 
-        # Sample frame at configured interval (e.g. every 2 seconds)
-        if (current_time - last_sample_time) >= BURST_SAMPLE_INTERVAL_SEC or not cached_face_overlays:
+        # Sample frame at configured interval (e.g. every 0.5s) while keeping UI at 30 FPS
+        if (current_time - last_sample_time) >= BURST_SAMPLE_INTERVAL_SEC:
             last_sample_time = current_time
             faces = recognizer.detect_and_embed(frame)
             cached_face_overlays = []

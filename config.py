@@ -50,7 +50,8 @@ WORKING_DAYS = [0, 1, 2, 3, 4]  # Monday=0, Tuesday=1, ..., Friday=4
 
 # 5-Minute Burst Window Settings
 BURST_WINDOW_MINUTES = 5  # Duration of start/end burst
-BURST_SAMPLE_INTERVAL_SEC = 2.0  # Take frame sample every 2 seconds
+BURST_SAMPLE_INTERVAL_SEC = 0.5  # Sample face every 0.5 seconds for snappy detection
+
 
 # Holiday Calendar (YYYY-MM-DD format)
 HOLIDAY_CALENDAR = [

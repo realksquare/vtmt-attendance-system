@@ -16,10 +16,13 @@ from liveness.quality import FaceQualityAnalyzer, QualityResult
 class FaceRecognizer:
     def __init__(self, name: str = INSIGHTFACE_MODEL_NAME):
         """Initialize InsightFace Analysis model and Anti-Spoofing engine."""
-        print(f"Loading InsightFace model ({name})...")
-        self.app = FaceAnalysis(name=name, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-        self.app.prepare(ctx_id=0, det_size=(640, 640))
-        print("InsightFace model loaded successfully!")
+        self.app = FaceAnalysis(
+            name=name,
+            allowed_modules=['detection', 'recognition', 'landmark_3d_68', 'landmark_2d_106'],
+            providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
+        )
+        self.app.prepare(ctx_id=0, det_size=(320, 320))
+        print("InsightFace model loaded successfully (CPU optimized)!")
 
         self.pad_engine = AntiSpoofEngine()
         self.quality_analyzer = FaceQualityAnalyzer()

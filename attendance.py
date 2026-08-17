@@ -37,36 +37,47 @@ def run_live_attendance(recognizer: FaceRecognizer):
     print("      Press 'Q' to quit and return to main menu.")
     print("="*50 + "\n")
 
+    frame_count = 0
+    cached_overlays = []
+
     while True:
         ret, frame = cap.read()
         if not ret:
             print("Failed to read frame.")
             break
 
-        faces = recognizer.detect_and_embed(frame)
+        frame_count += 1
         display_frame = frame.copy()
 
-        for face in faces:
-            box = face.bbox.astype(int)
-            res = recognizer.verify_face(frame, face, templates, require_challenge=False)
+        # Run model inference every 2nd frame for smooth 30 FPS UI
+        if frame_count % 2 == 0 or not cached_overlays:
+            faces = recognizer.detect_and_embed(frame)
+            cached_overlays = []
 
-            if not res.quality_passed:
-                label = f"QUALITY: {res.message}"
-                color = (0, 165, 255) # Orange warning for quality
-            elif not res.pad_passed:
-                label = f"SPOOF: {res.message}"
-                color = (0, 0, 255) # Red warning for spoof
-            elif res.authorized and res.identity:
-                label = f"{res.student_name} ({res.recognition_score:.2f})"
-                color = (0, 255, 0)  # Green for authorized live face
-                marked = record_attendance(res.identity, res.recognition_score)
-                if marked:
-                    print(f"ATTENDANCE MARKED: {res.student_name} ({res.identity}) | Confidence: {res.recognition_score:.2f}")
-            else:
-                label = f"Unknown ({res.recognition_score:.2f})"
-                color = (0, 165, 255)
+            for face in faces:
+                box = face.bbox.astype(int)
+                res = recognizer.verify_face(frame, face, templates, require_challenge=False)
 
-            # Draw bounding box & label
+                if not res.quality_passed:
+                    label = f"QUALITY: {res.message}"
+                    color = (0, 165, 255) # Orange warning for quality
+                elif not res.pad_passed:
+                    label = f"SPOOF: {res.message}"
+                    color = (0, 0, 255) # Red warning for spoof
+                elif res.authorized and res.identity:
+                    label = f"{res.student_name} ({res.recognition_score:.2f})"
+                    color = (0, 255, 0)  # Green for authorized live face
+                    marked = record_attendance(res.identity, res.recognition_score)
+                    if marked:
+                        print(f"ATTENDANCE MARKED: {res.student_name} ({res.identity}) | Confidence: {res.recognition_score:.2f}")
+                else:
+                    label = f"Unknown ({res.recognition_score:.2f})"
+                    color = (0, 165, 255)
+
+                cached_overlays.append((box, label, color))
+
+        # Render cached overlays on 30 FPS display frame
+        for box, label, color in cached_overlays:
             cv2.rectangle(display_frame, (box[0], box[1]), (box[2], box[3]), color, 2)
             cv2.rectangle(display_frame, (box[0], box[1] - 25), (box[2], box[1]), color, cv2.FILLED)
             cv2.putText(display_frame, label, (box[0] + 5, box[1] - 5),
