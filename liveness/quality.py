@@ -134,7 +134,12 @@ class FaceQualityAnalyzer:
             )
 
         # 7. Extreme pose check if pose metadata is attached
-        pose = getattr(face, "pose", None) or (face.get("pose") if isinstance(face, dict) else None)
+        pose = None
+        if hasattr(face, "pose"):
+            pose = getattr(face, "pose")
+        elif isinstance(face, dict):
+            pose = face.get("pose")
+
         if pose is not None and len(pose) >= 3:
             pitch, yaw, roll = abs(float(pose[0])), abs(float(pose[1])), abs(float(pose[2]))
             if pitch > 40.0 or roll > 35.0:

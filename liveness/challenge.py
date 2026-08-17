@@ -204,9 +204,16 @@ class LivenessChallengeController:
 
         # Extract landmarks and pose from face object if not passed directly
         if pose_angles is None:
-            pose_angles = getattr(face_obj, "pose", None) or (face_obj.get("pose") if isinstance(face_obj, dict) else None)
+            if hasattr(face_obj, "pose"):
+                pose_angles = getattr(face_obj, "pose")
+            elif isinstance(face_obj, dict):
+                pose_angles = face_obj.get("pose")
+
         if landmarks_2d is None:
-            landmarks_2d = getattr(face_obj, "landmark_2d_106", None) or (face_obj.get("landmark_2d_106") if isinstance(face_obj, dict) else None)
+            if hasattr(face_obj, "landmark_2d_106"):
+                landmarks_2d = getattr(face_obj, "landmark_2d_106")
+            elif isinstance(face_obj, dict):
+                landmarks_2d = face_obj.get("landmark_2d_106")
 
         yaw = float(pose_angles[1]) if (pose_angles is not None and len(pose_angles) >= 2) else 0.0
         pitch = float(pose_angles[0]) if (pose_angles is not None and len(pose_angles) >= 1) else 0.0
