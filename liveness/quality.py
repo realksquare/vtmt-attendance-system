@@ -1,21 +1,38 @@
 """
 Face Quality Analyzer Module.
-Filters low-quality, blurry, under/over-exposed, cut-off, or multi-face presentations
-before expensive PAD and face recognition processing.
+Implements a 3-Tier Quality Hierarchy for Classroom and Individual Face Analysis:
+- RECOGNITION_SAFE: Clear, sufficiently large face suitable for biometric recognition & PAD.
+- TRACKABLE_BUT_SMALL: Detectable face (e.g. back row student) suitable for tracking and evidence accumulation.
+- UNUSABLE: Insufficient information, severe blur, or out-of-bounds face.
 """
 
+from enum import Enum
 from typing import List, Tuple, Optional, Dict, Any
 from dataclasses import dataclass, field
 import numpy as np
 import cv2
 
-from config import QUALITY_MIN_FACE_AREA_RATIO, QUALITY_BLUR_THRESHOLD
+from config import (
+    QUALITY_MIN_FACE_AREA_RATIO,
+    QUALITY_TRACKABLE_MIN_AREA_RATIO,
+    QUALITY_BLUR_THRESHOLD,
+    QUALITY_TRACKABLE_BLUR_THRESHOLD,
+    QUALITY_MIN_BRIGHTNESS,
+    QUALITY_MAX_BRIGHTNESS
+)
+
+
+class QualityTier(str, Enum):
+    RECOGNITION_SAFE = "RECOGNITION_SAFE"
+    TRACKABLE_BUT_SMALL = "TRACKABLE_BUT_SMALL"
+    UNUSABLE = "UNUSABLE"
 
 
 @dataclass
 class QualityResult:
     passed: bool
     reason: str
+    tier: QualityTier = QualityTier.UNUSABLE
     blur_score: float = 0.0
     area_ratio: float = 0.0
     brightness_mean: float = 0.0
@@ -24,54 +41,54 @@ class QualityResult:
 
 class FaceQualityAnalyzer:
     """
-    Evaluates face image quality metrics:
-    - Face count constraint (exactly 1 face in session)
-    - Face-to-frame area ratio
-    - Boundary completeness (margin from edge)
+    Evaluates individual face quality metrics against calibrated classroom tiers:
+    - Minimum face size ratio (safe vs trackable vs unusable)
+    - Boundary margin completeness (not cut off at frame border)
     - Sharpness via Laplacian variance
     - Lighting / exposure distribution
-    - Extreme head pose check
+    - Extreme head pose angles
+    - Single-face constraint (optional for 1-on-1 enrollment, bypassed in classroom mode)
     """
 
     def __init__(
         self,
-        min_area_ratio: float = QUALITY_MIN_FACE_AREA_RATIO,
-        blur_threshold: float = QUALITY_BLUR_THRESHOLD,
-        min_brightness: float = 35.0,
-        max_brightness: float = 235.0
+        min_safe_area_ratio: float = QUALITY_MIN_FACE_AREA_RATIO,
+        min_trackable_area_ratio: float = QUALITY_TRACKABLE_MIN_AREA_RATIO,
+        safe_blur_threshold: float = QUALITY_BLUR_THRESHOLD,
+        trackable_blur_threshold: float = QUALITY_TRACKABLE_BLUR_THRESHOLD,
+        min_brightness: float = QUALITY_MIN_BRIGHTNESS,
+        max_brightness: float = QUALITY_MAX_BRIGHTNESS
     ):
-        self.min_area_ratio = min_area_ratio
-        self.blur_threshold = blur_threshold
+        self.min_safe_area_ratio = min_safe_area_ratio
+        self.min_trackable_area_ratio = min_trackable_area_ratio
+        self.safe_blur_threshold = safe_blur_threshold
+        self.trackable_blur_threshold = trackable_blur_threshold
         self.min_brightness = min_brightness
         self.max_brightness = max_brightness
 
-    def assess_frame(
+    def assess_face(
         self,
         full_frame: np.ndarray,
-        faces: List[Any]
+        face_obj: Any
     ) -> QualityResult:
         """
-        Assesses entire frame and detected faces list against quality constraints.
+        Assesses a single face object within a frame into a 3-tier quality classification.
         """
-        if full_frame is None or full_frame.size == 0:
-            return QualityResult(passed=False, reason="Empty camera frame")
+        if full_frame is None or full_frame.size == 0 or face_obj is None:
+            return QualityResult(passed=False, reason="Empty frame or null face", tier=QualityTier.UNUSABLE)
 
         fh, fw, _ = full_frame.shape
         frame_area = float(fh * fw)
 
-        # 1. Face count constraint
-        if len(faces) == 0:
-            return QualityResult(passed=False, reason="No face detected. Please position your face clearly.")
-        elif len(faces) > 1:
-            return QualityResult(
-                passed=False,
-                reason=f"Multiple faces detected ({len(faces)}). Please ensure only ONE person is in view."
-            )
+        # Extract bounding box safely
+        bbox = None
+        if hasattr(face_obj, "bbox"):
+            bbox = getattr(face_obj, "bbox")
+        elif isinstance(face_obj, dict):
+            bbox = face_obj.get("bbox")
 
-        face = faces[0]
-        bbox = face.bbox if hasattr(face, "bbox") else face.get("bbox")
         if bbox is None or len(bbox) < 4:
-            return QualityResult(passed=False, reason="Invalid face bounding box")
+            return QualityResult(passed=False, reason="Invalid face bounding box", tier=QualityTier.UNUSABLE)
 
         x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
         bw = max(0, x2 - x1)
@@ -79,88 +96,145 @@ class FaceQualityAnalyzer:
         face_area = float(bw * bh)
         area_ratio = face_area / (frame_area + 1e-5)
 
-        # 2. Minimum face size ratio
-        if area_ratio < self.min_area_ratio or bw < 40 or bh < 40:
+        # Boundary margin check
+        margin = 6
+        is_cut_off = (x1 < margin or y1 < margin or x2 > (fw - margin) or y2 > (fh - margin))
+        if is_cut_off and area_ratio < self.min_trackable_area_ratio:
             return QualityResult(
                 passed=False,
-                area_ratio=area_ratio,
-                reason="Face too small. Please move closer to the camera."
+                reason="Face cut off at frame border",
+                tier=QualityTier.UNUSABLE,
+                area_ratio=area_ratio
             )
 
-        # 3. Boundary margin (not cut off at frame borders)
-        margin = 10
-        if x1 < margin or y1 < margin or x2 > (fw - margin) or y2 > (fh - margin):
-            return QualityResult(
-                passed=False,
-                area_ratio=area_ratio,
-                reason="Face cut off at frame border. Please center your face."
-            )
-
-        # 4. Crop face region for texture and lighting analysis
+        # Crop face region for texture, blur, and lighting analysis
         cx1, cy1, cx2, cy2 = max(0, x1), max(0, y1), min(fw, x2), min(fh, y2)
         face_crop = full_frame[cy1:cy2, cx1:cx2]
         if face_crop.size == 0:
-            return QualityResult(passed=False, reason="Invalid face crop")
+            return QualityResult(passed=False, reason="Invalid face crop size", tier=QualityTier.UNUSABLE)
 
         gray_crop = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
 
-        # 5. Sharpness (Laplacian variance)
+        # Sharpness (Laplacian variance)
         blur_score = float(cv2.Laplacian(gray_crop, cv2.CV_64F).var())
-        if blur_score < self.blur_threshold:
-            return QualityResult(
-                passed=False,
-                blur_score=blur_score,
-                area_ratio=area_ratio,
-                reason=f"Image too blurry (Score: {blur_score:.1f} < {self.blur_threshold:.1f}). Hold still."
-            )
 
-        # 6. Lighting / Exposure distribution
+        # Lighting / Exposure distribution
         brightness_mean = float(np.mean(gray_crop))
+
+        details = {
+            "bbox": [x1, y1, x2, y2],
+            "area_ratio": area_ratio,
+            "blur_score": blur_score,
+            "brightness_mean": brightness_mean,
+            "is_cut_off": is_cut_off
+        }
+
+        # Check for extreme lighting / exposure
         if brightness_mean < self.min_brightness:
             return QualityResult(
                 passed=False,
+                reason="Lighting too dark. Face poorly illuminated.",
+                tier=QualityTier.UNUSABLE,
                 blur_score=blur_score,
                 area_ratio=area_ratio,
                 brightness_mean=brightness_mean,
-                reason="Lighting too dark. Please face towards light."
+                details=details
             )
         elif brightness_mean > self.max_brightness:
             return QualityResult(
                 passed=False,
+                reason="Lighting over-exposed / severe glare.",
+                tier=QualityTier.UNUSABLE,
                 blur_score=blur_score,
                 area_ratio=area_ratio,
                 brightness_mean=brightness_mean,
-                reason="Lighting over-exposed / glaring. Please adjust lighting."
+                details=details
             )
 
-        # 7. Extreme pose check if pose metadata is attached
+        # Pose check if pose is attached
         pose = None
-        if hasattr(face, "pose"):
-            pose = getattr(face, "pose")
-        elif isinstance(face, dict):
-            pose = face.get("pose")
+        if hasattr(face_obj, "pose"):
+            pose = getattr(face_obj, "pose")
+        elif isinstance(face_obj, dict):
+            pose = face_obj.get("pose")
 
+        extreme_pose = False
         if pose is not None and len(pose) >= 3:
             pitch, yaw, roll = abs(float(pose[0])), abs(float(pose[1])), abs(float(pose[2]))
-            if pitch > 40.0 or roll > 35.0:
-                return QualityResult(
-                    passed=False,
-                    blur_score=blur_score,
-                    area_ratio=area_ratio,
-                    brightness_mean=brightness_mean,
-                    reason="Extreme head tilt. Please look straight at the camera."
-                )
+            details["pose"] = [pitch, yaw, roll]
+            if pitch > 42.0 or roll > 38.0 or yaw > 50.0:
+                extreme_pose = True
 
+        # Classify into 3 Tiers:
+        # 1. UNUSABLE
+        if (
+            area_ratio < self.min_trackable_area_ratio
+            or blur_score < self.trackable_blur_threshold
+            or extreme_pose
+        ):
+            reason_msg = "Face too blurry or tiny" if blur_score < self.trackable_blur_threshold else "Face too small / unusable"
+            if extreme_pose:
+                reason_msg = "Extreme head pose angle"
+            return QualityResult(
+                passed=False,
+                reason=reason_msg,
+                tier=QualityTier.UNUSABLE,
+                blur_score=blur_score,
+                area_ratio=area_ratio,
+                brightness_mean=brightness_mean,
+                details=details
+            )
+
+        # 2. TRACKABLE_BUT_SMALL (e.g. Back/Middle row in classroom)
+        if (
+            area_ratio < self.min_safe_area_ratio
+            or blur_score < self.safe_blur_threshold
+            or is_cut_off
+        ):
+            return QualityResult(
+                passed=True,
+                reason="Trackable small/distant face",
+                tier=QualityTier.TRACKABLE_BUT_SMALL,
+                blur_score=blur_score,
+                area_ratio=area_ratio,
+                brightness_mean=brightness_mean,
+                details=details
+            )
+
+        # 3. RECOGNITION_SAFE
         return QualityResult(
             passed=True,
-            reason="Face Quality Passed",
+            reason="Face Quality Safe for Biometric Recognition",
+            tier=QualityTier.RECOGNITION_SAFE,
             blur_score=blur_score,
             area_ratio=area_ratio,
             brightness_mean=brightness_mean,
-            details={
-                "area_ratio": area_ratio,
-                "blur_score": blur_score,
-                "brightness_mean": brightness_mean,
-                "bbox": [x1, y1, x2, y2]
-            }
+            details=details
         )
+
+    def assess_frame(
+        self,
+        full_frame: np.ndarray,
+        faces: List[Any],
+        enforce_single_face: bool = False
+    ) -> QualityResult:
+        """
+        Assesses entire frame and detected faces list.
+        enforce_single_face: Set True for 1-on-1 enrollment or active challenge.
+                             Set False for classroom multi-student burst capture.
+        """
+        if full_frame is None or full_frame.size == 0:
+            return QualityResult(passed=False, reason="Empty camera frame", tier=QualityTier.UNUSABLE)
+
+        if len(faces) == 0:
+            return QualityResult(passed=False, reason="No face detected in view", tier=QualityTier.UNUSABLE)
+
+        if enforce_single_face and len(faces) > 1:
+            return QualityResult(
+                passed=False,
+                reason=f"Multiple faces detected ({len(faces)}). Please ensure only ONE person is in view for enrollment.",
+                tier=QualityTier.UNUSABLE
+            )
+
+        # In multi-student or single-face mode, assess the primary/first face
+        return self.assess_face(full_frame, faces[0])

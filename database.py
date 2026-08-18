@@ -519,7 +519,13 @@ def get_all_decrypted_templates(aes_key: bytes) -> List[Tuple[str, str, np.ndarr
     return decrypted_list
 
 
-def record_window_attendance(student_id: str, slot_id: str, window: str, confidence: float) -> bool:
+def record_window_attendance(
+    student_id: str,
+    slot_id: str,
+    window: str,
+    confidence: float,
+    status: str = "PRESENT"
+) -> bool:
     """Record attendance for Window A (First 5m), Window B (Mid 5m), or Window C (Last 5m)."""
     db = SessionLocal()
     today = date.today()
@@ -544,16 +550,21 @@ def record_window_attendance(student_id: str, slot_id: str, window: str, confide
             )
             db.add(record)
 
+        target_status = status.upper() if status else "PRESENT"
+
         if window == "WINDOW_A":
-            record.window_a_status = "PRESENT"
+            if target_status == "PRESENT" or record.window_a_status != "PRESENT":
+                record.window_a_status = target_status
             record.window_a_time = now_str
             record.window_a_confidence = max(record.window_a_confidence or 0.0, float(confidence))
         elif window == "WINDOW_B":
-            record.window_b_status = "PRESENT"
+            if target_status == "PRESENT" or record.window_b_status != "PRESENT":
+                record.window_b_status = target_status
             record.window_b_time = now_str
             record.window_b_confidence = max(record.window_b_confidence or 0.0, float(confidence))
         elif window == "WINDOW_C":
-            record.window_c_status = "PRESENT"
+            if target_status == "PRESENT" or record.window_c_status != "PRESENT":
+                record.window_c_status = target_status
             record.window_c_time = now_str
             record.window_c_confidence = max(record.window_c_confidence or 0.0, float(confidence))
 
@@ -561,14 +572,20 @@ def record_window_attendance(student_id: str, slot_id: str, window: str, confide
         if not remarks_str.startswith("Manual"):
             # Tri-Window 2-out-of-3 Majority Voting Decision Logic
             wins_present = 0
-            if record.window_a_status == "PRESENT": wins_present += 1
-            if record.window_b_status == "PRESENT": wins_present += 1
-            if record.window_c_status == "PRESENT": wins_present += 1
+            wins_unresolved = 0
+
+            for st in [record.window_a_status, record.window_b_status, record.window_c_status]:
+                if st == "PRESENT":
+                    wins_present += 1
+                elif st == "UNRESOLVED":
+                    wins_unresolved += 1
 
             if wins_present >= 2:
                 record.final_status = "PRESENT"
             elif wins_present == 1:
                 record.final_status = "PARTIAL"
+            elif wins_unresolved > 0:
+                record.final_status = "UNRESOLVED"
             else:
                 record.final_status = "ABSENT"
 

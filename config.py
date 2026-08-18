@@ -25,17 +25,30 @@ SECRET_KEY_PATH = os.path.join(KEYS_DIR, "secret.key")
 DB_PATH = os.path.join(DB_DIR, "attendance.db")
 DATABASE_URL = f"sqlite:///{DB_PATH}"
 
-# Anti-Spoofing & Liveness Settings
+# Presentation Attack Detection (PAD) & Anti-Spoofing Settings
+MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 PAD_MODEL_V2_PATH = os.path.join(MODELS_DIR, "2.7_80x80_MiniFASNetV2.onnx")
 PAD_MODEL_V1SE_PATH = os.path.join(MODELS_DIR, "4_0_0_80x80_MiniFASNetV1SE.onnx")
-PAD_SCORE_THRESHOLD = 0.65  # Minimum genuine probability threshold for MiniFASNet
-PAD_MIN_VALID_SAMPLES = 5   # Minimum multi-frame aggregated samples
-QUALITY_MIN_FACE_AREA_RATIO = 0.025  # Minimum face/frame area ratio
-QUALITY_BLUR_THRESHOLD = 15.0        # Minimum Laplacian variance
+PAD_SCORE_THRESHOLD = 0.70  # Genuine face confidence threshold for MiniFASNet
+PAD_MIN_VALID_SAMPLES = 2   # Minimum valid samples for multi-frame aggregator
+
+# 3-Tier Face Quality Calibration (Front/Mid/Back Row Classroom Support)
+QUALITY_MIN_FACE_AREA_RATIO = 0.008  # Default safe recognition threshold (~0.8% of frame area, ~40x40px)
+QUALITY_TRACKABLE_MIN_AREA_RATIO = 0.002 # Trackable but small threshold (~0.2% frame area, ~20x20px)
+QUALITY_BLUR_THRESHOLD = 15.0       # Laplacian variance blur threshold for safe recognition
+QUALITY_TRACKABLE_BLUR_THRESHOLD = 8.0 # Minimum sharpness for trackable faces
+QUALITY_MIN_BRIGHTNESS = 30.0       # Minimum brightness
+QUALITY_MAX_BRIGHTNESS = 240.0      # Maximum brightness
+
+# Burst Aggregation & Candidate Voting Settings
+BURST_MIN_VALID_OBSERVATIONS = 2    # Minimum valid observations required to confirm attendance in a window
+BURST_IDENTITY_SUPPORT_RATIO = 0.60 # At least 60% of identity observations must match candidate
+BURST_TRACK_MAX_ABSENT_FRAMES = 8   # Frames before a lost track is considered ended
+
+# Active Liveness Challenge Settings (For 1-on-1 Interactive Enrollment)
 CHALLENGE_PER_ACTION_TIMEOUT = 3.5  # Seconds per active challenge action
 CHALLENGE_TOTAL_TIMEOUT = 10.0      # Total session timeout in seconds
 CHALLENGE_ACTION_COUNT = 2          # Number of actions per active challenge session
-
 
 # Face Recognition Settings
 INSIGHTFACE_MODEL_NAME = "buffalo_l"

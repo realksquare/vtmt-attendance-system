@@ -7,14 +7,16 @@ Implements multi-stage hybrid offline verification:
 - Temporal Validation & Fail-Closed Decision Engine
 """
 
-from .quality import FaceQualityAnalyzer, QualityResult
+from .quality import FaceQualityAnalyzer, QualityResult, QualityTier
 from .pad_engine import AntiSpoofEngine, MultiFramePADAggregator, PADResult
 from .challenge import LivenessChallengeController, ChallengeAction, ChallengeState
 from .verification import VerificationSession, DecisionEngine, VerificationResult, ReasonCode
+from .tracker import ClassroomFaceTracker, BurstDecisionAggregator, TrackEvidence, TrackDecision, FaceObservation
 
 __all__ = [
     "FaceQualityAnalyzer",
     "QualityResult",
+    "QualityTier",
     "AntiSpoofEngine",
     "MultiFramePADAggregator",
     "PADResult",
@@ -25,4 +27,9 @@ __all__ = [
     "DecisionEngine",
     "VerificationResult",
     "ReasonCode",
+    "ClassroomFaceTracker",
+    "BurstDecisionAggregator",
+    "TrackEvidence",
+    "TrackDecision",
+    "FaceObservation",
 ]

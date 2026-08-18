@@ -1,24 +1,95 @@
 """
 Burst Engine Module.
-Executes automated camera burst capture for Window A (First 5 Mins) & Window B (Last 5 Mins).
-Matches faces against decrypted AES templates and saves cropped images of unknown faces.
+Executes classroom-wide automated camera burst capture for Window A (First 5m), Window B (Mid 5m), & Window C (Last 5m).
+Features:
+- Decoupled threaded camera capture buffer for responsive 30-60 FPS UI.
+- 3-Tier Face Quality hierarchy (RECOGNITION_SAFE, TRACKABLE_BUT_SMALL, UNUSABLE).
+- Classroom multi-student spatial-temporal face tracking (ClassroomFaceTracker).
+- Burst-level multi-observation candidate identity voting and MiniFASNet PAD aggregation.
+- Atomic single-transaction attendance commit at the conclusion of the burst window.
 """
 
 import os
 import time
+import threading
 from datetime import datetime, date
+from typing import Optional, List, Tuple
 import cv2
 import numpy as np
 
 from config import (
-    FRAME_WIDTH, FRAME_HEIGHT, MATCH_THRESHOLD,
+    FRAME_WIDTH, FRAME_HEIGHT, MATCH_THRESHOLD, PAD_SCORE_THRESHOLD,
     BURST_WINDOW_MINUTES, BURST_SAMPLE_INTERVAL_SEC, UNKNOWNS_DIR
 )
 from encrypt import get_or_create_key
 from database import (
-    get_all_decrypted_templates, record_window_attendance, add_unknown_face, init_db
+    get_all_decrypted_templates, record_window_attendance, add_unknown_face, init_db,
+    SessionLocal, Student
 )
 from recognition import FaceRecognizer
+from liveness.quality import FaceQualityAnalyzer, QualityTier, QualityResult
+from liveness.pad_engine import AntiSpoofEngine, PADResult
+from liveness.tracker import ClassroomFaceTracker, BurstDecisionAggregator, FaceObservation
+
+
+class ThreadedCamera:
+    """
+    Decoupled background camera acquisition thread.
+    Maintains a non-blocking latest-frame buffer to prevent OpenCV UI freezing.
+    """
+
+    def __init__(self, src: int = 0, width: int = FRAME_WIDTH, height: int = FRAME_HEIGHT, fps: int = 30):
+        # Attempt DirectShow backend first, fallback to default
+        self.cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+        if not self.cap.isOpened():
+            self.cap.release()
+            self.cap = cv2.VideoCapture(src)
+
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        self.cap.set(cv2.CAP_PROP_FPS, fps)
+
+        self.lock = threading.Lock()
+        self.running = False
+        self.frame = None
+        self.ret = False
+        self.thread = None
+
+    def start(self) -> bool:
+        if not self.cap.isOpened():
+            return False
+        self.ret, self.frame = self.cap.read()
+        if not self.ret or self.frame is None:
+            return False
+
+        self.running = True
+        self.thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self.thread.start()
+        return True
+
+    def _capture_loop(self):
+        while self.running:
+            ret, frame = self.cap.read()
+            if ret and frame is not None:
+                with self.lock:
+                    self.ret = ret
+                    self.frame = frame
+            else:
+                time.sleep(0.01)
+
+    def read_latest(self) -> Tuple[bool, Optional[np.ndarray]]:
+        with self.lock:
+            if not self.ret or self.frame is None:
+                return False, None
+            return True, self.frame.copy()
+
+    def stop(self):
+        self.running = False
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=1.0)
+        if self.cap.isOpened():
+            self.cap.release()
 
 
 def run_burst_capture(
@@ -29,41 +100,38 @@ def run_burst_capture(
     show_window: bool = True
 ):
     """
-    Executes automated burst capture for a lecture slot window.
-    window: 'WINDOW_A' (First 5 mins) or 'WINDOW_B' (Last 5 mins).
+    Executes classroom-wide automated burst capture for a lecture slot window.
+    window: 'WINDOW_A' (First 5m), 'WINDOW_B' (Mid 5m), or 'WINDOW_C' (Last 5m).
     duration_seconds: Duration camera stays active for burst processing.
-    show_window: Whether to display OpenCV video window (True for live preview, False for silent background).
+    show_window: Whether to display OpenCV video window.
     """
     init_db()
     aes_key = get_or_create_key()
 
-    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Starting {window} Burst Capture for Slot '{slot_id}' (Duration: {duration_seconds}s)...")
-    
-    # Decrypt stored templates in memory once at start of burst
+    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Starting {window} Classroom Burst Capture for Slot '{slot_id}' (Duration: {duration_seconds}s)...")
+
+    # 1. Decrypt enrolled student biometric templates once into memory
     templates = get_all_decrypted_templates(aes_key)
+    enrolled_student_ids = [t[0] for t in templates]
     print(f"[{window}] Decrypted {len(templates)} enrolled student biometric template(s) in memory.")
 
-    # Prepare unknown storage directory for today and current slot
+    # 2. Prepare unknowns directory
     today_str = date.today().strftime("%Y-%m-%d")
     slot_unknown_dir = os.path.join(UNKNOWNS_DIR, today_str, slot_id, window)
     os.makedirs(slot_unknown_dir, exist_ok=True)
 
-    # Optimize camera capture with DirectShow and fallback to standard backend
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-    if not cap.isOpened():
-        cap.release()
-        cap = cv2.VideoCapture(0)
-
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
-    cap.set(cv2.CAP_PROP_FPS, 30)
-
-    if not cap.isOpened():
+    # 3. Start Decoupled Threaded Camera
+    camera = ThreadedCamera(src=0, width=FRAME_WIDTH, height=FRAME_HEIGHT, fps=30)
+    if not camera.start():
         print(f"ERROR [{window}]: Could not open webcam.")
         return
 
-    window_name = f"Smart Attendance - Burst ({window})"
+    # 4. Initialize Multi-Face Tracker and Quality Analyzer
+    tracker = ClassroomFaceTracker(iou_threshold=0.25, max_centroid_dist=120.0)
+    quality_analyzer = recognizer.quality_analyzer
+    pad_engine = recognizer.pad_engine
+
+    window_name = f"Smart Attendance - Classroom Burst ({window})"
     if show_window:
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(window_name, FRAME_WIDTH, FRAME_HEIGHT)
@@ -72,119 +140,161 @@ def run_burst_capture(
         except Exception:
             pass
 
-    start_time = None
+    start_time = time.time()
     last_sample_time = 0.0
-    unknown_counter = 0
-    cached_face_overlays = []
-    saved_unknown_embeddings_in_window = []
+    active_hud_overlays = []
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print(f"Warning [{window}]: Failed to grab frame.")
-            time.sleep(0.05)
-            continue
-
-        if start_time is None:
-            start_time = time.time()
-
-        current_time = time.time()
-        elapsed = current_time - start_time
-        if elapsed >= duration_seconds:
-            break
-
-        display_frame = frame.copy()
-        remaining_sec = max(0, int(duration_seconds - elapsed))
-
-        # Sample frame at configured interval (e.g. every 0.5s) while keeping UI at 30 FPS
-        if (current_time - last_sample_time) >= BURST_SAMPLE_INTERVAL_SEC:
-            last_sample_time = current_time
-            faces = recognizer.detect_and_embed(frame)
-            cached_face_overlays = []
-
-            for face in faces:
-                box = face.bbox.astype(int)
-                embedding = face.embedding
-
-                # Full Fail-Closed Pipeline: Quality -> MiniFASNet PAD -> Recognition -> Decision Gate
-                res = recognizer.verify_face(frame, face, templates, require_challenge=False)
-
-                if not res.quality_passed:
-                    cached_face_overlays.append((box, f"QUALITY: {res.message}", (0, 165, 255)))
-                    continue
-
-                if not res.pad_passed:
-                    print(f"  -> [{window} ANTI-SPOOF REJECTED]: {res.reason_code} | {res.message} (Score: {res.pad_score:.2f})")
-                    cached_face_overlays.append((box, f"SPOOF: {res.message}", (0, 0, 255)))
-                    continue
-
-                if res.authorized and res.identity:
-                    # Recognized student with verified live presentation
-                    marked = record_window_attendance(res.identity, slot_id, window, res.recognition_score)
-                    if marked:
-                        print(f"  -> [{window} RECOGNIZED & LIVE]: {res.student_name} ({res.identity}) | Conf: {res.recognition_score:.2f} | PAD: {res.pad_score:.2f}")
-                    cached_face_overlays.append((box, f"{res.student_name} ({res.recognition_score:.2f})", (0, 255, 0)))
-                else:
-                    # Unrecognized face logic with boundary completeness check and deduplication
-                    h, w, _ = frame.shape
-                    score = res.recognition_score
-                    box_w = box[2] - box[0]
-                    box_h = box[3] - box[1]
-
-                    # 1. Boundary Completeness Check: Ensure face is NOT cut off at edges
-                    is_fully_captured = (
-                        box[0] >= 15 and box[1] >= 15 and
-                        box[2] <= (w - 15) and box[3] <= (h - 15) and
-                        box_w >= 60 and box_h >= 60
-                    )
-
-                    if is_fully_captured:
-                        # 2. In-Window Deduplication: Check if this unknown face was already saved in this window
-                        is_duplicate_unknown = False
-                        for saved_emb in saved_unknown_embeddings_in_window:
-                            if recognizer.cosine_similarity(embedding, saved_emb) >= MATCH_THRESHOLD:
-                                is_duplicate_unknown = True
-                                break
-
-                        if not is_duplicate_unknown:
-                            saved_unknown_embeddings_in_window.append(embedding)
-                            unknown_counter += 1
-                            x1, y1, x2, y2 = max(0, box[0]), max(0, box[1]), min(w, box[2]), min(h, box[3])
-                            crop = frame[y1:y2, x1:x2]
-                            img_filename = f"unknown_{datetime.now().strftime('%H%M%S')}_{unknown_counter}.jpg"
-                            img_path = os.path.join(slot_unknown_dir, img_filename)
-                            cv2.imwrite(img_path, crop)
-                            add_unknown_face(slot_id, window, img_path)
-                            print(f"  -> [{window} UNKNOWN SAVED]: Clean crop saved to {img_path}")
-                        else:
-                            pass # Skip duplicate save for already recorded unknown in this window
-                    else:
-                        # Partial/cut-off face at edge -> do not record
-                        pass
-
-                    cached_face_overlays.append((box, f"Unknown ({score:.2f})", (0, 0, 255)))
-
-        # Draw cached face overlays on smooth 30 FPS display frame
-        for box, label, color in cached_face_overlays:
-            cv2.rectangle(display_frame, (box[0], box[1]), (box[2], box[3]), color, 2)
-            cv2.rectangle(display_frame, (box[0], box[1] - 22), (box[2], box[1]), color, cv2.FILLED)
-            cv2.putText(display_frame, label, (box[0] + 5, box[1] - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-
-        # Render status banner on video stream window
-        if show_window:
-            status_text = f"AUTOMATED BURST ({window}) | Slot: {slot_id} | Time Remaining: {remaining_sec}s"
-            cv2.rectangle(display_frame, (0, 0), (FRAME_WIDTH, 35), (30, 30, 30), cv2.FILLED)
-            cv2.putText(display_frame, status_text, (10, 24),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-
-            cv2.imshow(f"Smart Attendance - Burst ({window})", display_frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                print(f"Burst window '{window}' manually interrupted.")
+    try:
+        while True:
+            current_time = time.time()
+            elapsed = current_time - start_time
+            if elapsed >= duration_seconds:
                 break
 
-    cap.release()
-    if show_window:
-        cv2.destroyAllWindows()
+            ret, frame = camera.read_latest()
+            if not ret or frame is None:
+                time.sleep(0.01)
+                continue
 
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Completed {window} Burst Capture for Slot '{slot_id}'.\n")
+            display_frame = frame.copy()
+            remaining_sec = max(0, int(duration_seconds - elapsed))
+
+            # Sample inference at controlled interval (e.g. every 0.4s) while displaying at 60 FPS
+            if (current_time - last_sample_time) >= BURST_SAMPLE_INTERVAL_SEC:
+                last_sample_time = current_time
+                faces = recognizer.detect_and_embed(frame)
+                current_observations = []
+
+                for face in faces:
+                    box = face.bbox.astype(int)
+                    embedding = face.embedding
+
+                    # 1. 3-Tier Face Quality Assessment
+                    q_res = quality_analyzer.assess_face(frame, face)
+
+                    # Crop face region
+                    h, w, _ = frame.shape
+                    cx1, cy1, cx2, cy2 = max(0, box[0]), max(0, box[1]), min(w, box[2]), min(h, box[3])
+                    crop_img = frame[cy1:cy2, cx1:cx2].copy() if (cx2 > cx1 and cy2 > cy1) else None
+
+                    # 2. Passive MiniFASNet PAD Inference
+                    pad_res = None
+                    if q_res.tier != QualityTier.UNUSABLE:
+                        pad_res = pad_engine.verify(frame, box)
+
+                    # 3. Independent Face Recognition Candidate Match
+                    matched_id = None
+                    matched_name = None
+                    best_score = 0.0
+
+                    if q_res.tier == QualityTier.RECOGNITION_SAFE and embedding is not None:
+                        matched_id, matched_name, best_score = recognizer.find_match(embedding, templates)
+
+                    obs = FaceObservation(
+                        timestamp=current_time,
+                        bbox=box,
+                        quality_res=q_res,
+                        pad_res=pad_res,
+                        embedding=embedding,
+                        matched_id=matched_id,
+                        matched_name=matched_name,
+                        similarity=best_score,
+                        crop_image=crop_img
+                    )
+                    current_observations.append(obs)
+
+                # Update Multi-Face Tracker
+                matched_tracks = tracker.update(current_observations)
+
+                # Build HUD overlays for real-time visual feedback
+                active_hud_overlays = []
+                for track_id, obs in matched_tracks:
+                    box = obs.bbox
+                    tier = obs.quality_res.tier
+                    if tier == QualityTier.UNUSABLE:
+                        label = f"T#{track_id}: Poor Quality"
+                        color = (0, 165, 255) # Orange
+                    elif tier == QualityTier.TRACKABLE_BUT_SMALL:
+                        label = f"T#{track_id}: Small Face"
+                        color = (255, 255, 0) # Cyan/Yellow
+                    else:
+                        # RECOGNITION_SAFE
+                        if obs.pad_res and not obs.pad_res.passed:
+                            label = f"T#{track_id}: SPOOF ({obs.pad_res.score:.2f})"
+                            color = (0, 0, 255) # Red
+                        elif obs.matched_id:
+                            label = f"T#{track_id}: {obs.matched_name} ({obs.similarity:.2f})"
+                            color = (0, 255, 0) # Green
+                        else:
+                            label = f"T#{track_id}: Unknown ({obs.similarity:.2f})"
+                            color = (0, 165, 255)
+
+                    active_hud_overlays.append((box, label, color))
+
+            # Render HUD overlays on smooth preview frame
+            for box, label, color in active_hud_overlays:
+                cv2.rectangle(display_frame, (box[0], box[1]), (box[2], box[3]), color, 2)
+                cv2.rectangle(display_frame, (box[0], max(0, box[1] - 22)), (box[2], box[1]), color, cv2.FILLED)
+                cv2.putText(display_frame, label, (box[0] + 4, max(12, box[1] - 6)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+
+            # Draw Window Status Bar
+            header_text = f"[{window}] Slot: {slot_id} | Time Remaining: {remaining_sec}s | Active Tracks: {len(tracker.active_tracks)}"
+            cv2.rectangle(display_frame, (0, 0), (FRAME_WIDTH, 28), (20, 20, 20), cv2.FILLED)
+            cv2.putText(display_frame, header_text, (10, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 255, 255), 1)
+
+            if show_window:
+                cv2.imshow(window_name, display_frame)
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q') or key == 27:
+                    print(f"[{window}] Burst capture interrupted by user.")
+                    break
+
+    finally:
+        camera.stop()
+        if show_window:
+            cv2.destroyAllWindows()
+
+    # =========================================================================
+    # 5. BURST-LEVEL AGGREGATION & ATOMIC ATTENDANCE COMMIT (ONCE PER WINDOW)
+    # =========================================================================
+    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Burst duration complete. Evaluating accumulated classroom tracks...")
+    all_tracks = tracker.get_all_tracks()
+    print(f"[{window}] Total tracks tracked across burst: {len(all_tracks)}")
+
+    evaluation = BurstDecisionAggregator.evaluate_burst_window(all_tracks, enrolled_student_ids)
+    records = evaluation["records"]
+    present_count = 0
+    unresolved_count = 0
+
+    for rec in records:
+        sid = rec["student_id"]
+        status = rec["status"]
+        conf = rec["confidence"]
+        sname = rec["student_name"] or sid
+
+        if status == "PRESENT":
+            present_count += 1
+            record_window_attendance(sid, slot_id, window, conf, status="PRESENT")
+            print(f"  -> [COMMITTED PRESENT]: {sname} ({sid}) | Conf: {conf:.2f} | Valid Obs: {rec['valid_obs']} | PAD: {rec['pad_score']:.2f}")
+        elif status == "UNRESOLVED":
+            unresolved_count += 1
+            record_window_attendance(sid, slot_id, window, conf, status="UNRESOLVED")
+            print(f"  -> [COMMITTED UNRESOLVED]: {sname} ({sid}) | Reason: {rec['reason']}")
+        else:
+            # ABSENT - Record absent state if record exists or maintain absent default
+            pass
+
+    # 6. Save deduplicated unknown face crops
+    saved_unknown_embeddings = []
+    unknown_count = 0
+    for u_track in evaluation["unknown_tracks"]:
+        if u_track.best_crop is not None and u_track.best_crop.size > 0:
+            unknown_count += 1
+            img_filename = f"unknown_{datetime.now().strftime('%H%M%S')}_t{u_track.track_id}.jpg"
+            img_path = os.path.join(slot_unknown_dir, img_filename)
+            cv2.imwrite(img_path, u_track.best_crop)
+            add_unknown_face(slot_id, window, img_path)
+            print(f"  -> [UNKNOWN FACE ARCHIVED]: Track #{u_track.track_id} saved to {img_path}")
+
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Completed {window} Burst: {present_count} Present, {unresolved_count} Unresolved, {unknown_count} Unknown Alert(s).\n")
