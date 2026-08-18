@@ -930,7 +930,7 @@ function renderEnrolledEmbeddingView() {
         // Expanded: Render all 512 points in a sleek scrollable matrix
         pointsHtml = `
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                <span style="font-size:10px; color:var(--text-muted); font-weight:600;">Complete 512-Dimensional Vector ($D_0 \dots D_{511}$):</span>
+                <span style="font-size:10px; color:var(--text-muted); font-weight:600;">Complete 512-Dimensional Vector (Dimensions D₀ to D₅₁₁):</span>
                 <button onclick="toggleAllEnrolledEmbeddingPoints()" style="background:rgba(255,255,255,0.08); border:1px solid var(--border); color:var(--text-muted); border-radius:4px; padding:1px 6px; font-size:10px; cursor:pointer;">
                     <i class="fa-solid fa-chevron-up"></i> Collapse
                 </button>
@@ -1378,17 +1378,17 @@ function renderBiometricInspectionResults(data) {
                         <span class="badge ${target.is_match ? 'badge-present' : 'badge-absent'}">Match: ${target.match_percent}%</span>
                     </div>
                     <p style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
-                        Showing first 64 dimensions. $A_i$ = Enrolled Template (${target.student_name}), $B_i$ = Active Face #${activeIdx + 1}. Dot product contribution $\sum A_i \cdot B_i$ determines the Cosine Match Score (${target.cosine_similarity.toFixed(4)}).
+                        Showing first 64 dimensions. A[i] = Enrolled Template (${target.student_name}), B[i] = Active Face #${activeIdx + 1}. Normalized Dot Product Contribution Σ(A · B) determines the Cosine Match Score (${target.cosine_similarity.toFixed(4)}).
                     </p>
                     <div class="table-responsive" style="max-height:220px; overflow-y:auto;">
                         <table>
                             <thead>
                                 <tr>
                                     <th>Dimension</th>
-                                    <th>Enrolled ($A_i$)</th>
-                                    <th>Probe ($B_i$)</th>
-                                    <th>Delta ($|A_i - B_i|$)</th>
-                                    <th>Contribution ($A_i \cdot B_i$)</th>
+                                    <th>Enrolled (A[i])</th>
+                                    <th>Probe (B[i])</th>
+                                    <th>Delta (|A - B|)</th>
+                                    <th>Contribution (A · B)</th>
                                 </tr>
                             </thead>
                             <tbody>
