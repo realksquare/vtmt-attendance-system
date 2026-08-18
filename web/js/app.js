@@ -1441,44 +1441,6 @@ function renderBiometricInspectionResults(data) {
 }
 
 
-    // 5. Ranked Matches Table
-    const tbody = document.getElementById('inspect-ranked-tbody');
-    if (tbody) {
-        if (ranked.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;">No enrolled students found to compare against.</td></tr>';
-            return;
-        }
-
-        let rHtml = '';
-        ranked.forEach((r, index) => {
-            const isMatch = r.is_match;
-            rHtml += `
-                <tr style="${index === 0 && isMatch ? 'background:rgba(16,185,129,0.08); font-weight:600;' : ''}">
-                    <td><strong>#${index + 1}</strong></td>
-                    <td><code>${r.student_id}</code></td>
-                    <td>${r.student_name}</td>
-                    <td><strong>${r.similarity.toFixed(4)}</strong></td>
-                    <td>
-                        <div style="display:flex; align-items:center; gap:6px;">
-                            <div style="flex:1; background:var(--border); height:6px; border-radius:3px; overflow:hidden; width:60px;">
-                                <div style="width:${Math.max(0, r.match_percent)}%; background:${isMatch ? 'var(--emerald)' : 'var(--primary-light)'}; height:100%;"></div>
-                            </div>
-                            <span>${r.match_percent}%</span>
-                        </div>
-                    </td>
-                    <td>
-                        <span class="badge ${isMatch ? 'badge-present' : 'badge-absent'}">
-                            ${isMatch ? 'PRESENT' : 'UNRESOLVED'}
-                        </span>
-                    </td>
-                </tr>
-            `;
-        });
-        tbody.innerHTML = rHtml;
-    }
-}
-
-
 async function submitStaffOverride(e) {
     e.preventDefault();
     const student_id = document.getElementById('override-student-select').value;
