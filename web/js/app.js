@@ -853,6 +853,8 @@ async function renderAdminPanel() {
 // ----------------------------------------------------
 let inspectProbeBase64 = null;
 let inspectLoadedProbeImage = null;
+let currentEnrolledTemplateData = null;
+let isEnrolledPointsExpanded = false;
 
 async function populateInspectStudentDropdown() {
     const select = document.getElementById('inspect-student-select');
@@ -879,6 +881,7 @@ async function loadEnrolledEmbeddingDetails() {
 
     const studentId = select.value;
     if (!studentId) {
+        currentEnrolledTemplateData = null;
         previewDiv.innerHTML = '<em>Select an enrolled student to view their decrypted 512-D embedding blueprint.</em>';
         return;
     }
@@ -887,22 +890,75 @@ async function loadEnrolledEmbeddingDetails() {
 
     try {
         const data = await API.getEnrolledEmbedding(studentId);
-        let sampleHtml = data.vector_sample.slice(0, 16).map(v => `<span style="display:inline-block; padding:1px 4px; margin:1px; background:rgba(255,255,255,0.06); border-radius:3px; font-family:monospace; font-size:10px;">${v > 0 ? '+' : ''}${v.toFixed(3)}</span>`).join(' ');
-
-        previewDiv.innerHTML = `
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                <strong style="color:var(--text);">${data.name} (${data.student_id})</strong>
-                <span class="badge badge-present" style="font-size:10px;">L2 Norm: ${data.l2_norm.toFixed(3)}</span>
-            </div>
-            <div style="font-size:11px; color:var(--text-muted); margin-bottom:6px;">
-                Dimensions: <strong>${data.dimensions}</strong> | Mean: <code>${data.stats.mean}</code> | Std: <code>${data.stats.std}</code>
-            </div>
-            <div style="font-size:10px; color:var(--text-muted); margin-bottom:4px;">Vector Blueprint Sample (First 16 points):</div>
-            <div style="line-height:1.5;">${sampleHtml} ...</div>
-        `;
+        currentEnrolledTemplateData = data;
+        isEnrolledPointsExpanded = false;
+        renderEnrolledEmbeddingView();
     } catch (err) {
+        currentEnrolledTemplateData = null;
         previewDiv.innerHTML = `<span style="color:var(--rose);"><i class="fa-solid fa-triangle-exclamation"></i> ${err.message}</span>`;
     }
+}
+
+function toggleAllEnrolledEmbeddingPoints() {
+    isEnrolledPointsExpanded = !isEnrolledPointsExpanded;
+    renderEnrolledEmbeddingView();
+}
+
+function renderEnrolledEmbeddingView() {
+    const previewDiv = document.getElementById('inspect-enrolled-preview');
+    if (!previewDiv || !currentEnrolledTemplateData) return;
+
+    const data = currentEnrolledTemplateData;
+    const fullPoints = data.vector_full || data.vector_sample;
+
+    let pointsHtml = '';
+    if (!isEnrolledPointsExpanded) {
+        // Show first 16 points + clickable expand button / dots
+        const sample16 = fullPoints.slice(0, 16);
+        pointsHtml = sample16.map((v, i) => {
+            const isPos = v >= 0;
+            const bg = isPos ? 'rgba(16, 185, 129, 0.15)' : 'rgba(59, 130, 246, 0.15)';
+            const border = isPos ? 'rgba(16, 185, 129, 0.3)' : 'rgba(59, 130, 246, 0.3)';
+            const textCol = isPos ? '#34d399' : '#60a5fa';
+            return `<span title="Dimension [${i}]: ${v.toFixed(5)}" style="display:inline-block; padding:2px 5px; margin:2px; background:${bg}; border:1px solid ${border}; color:${textCol}; border-radius:3px; font-family:monospace; font-size:10px;">${isPos ? '+' : ''}${v.toFixed(3)}</span>`;
+        }).join(' ');
+
+        pointsHtml += ` <button onclick="toggleAllEnrolledEmbeddingPoints()" style="background:rgba(99,102,241,0.2); border:1px solid var(--primary-light); color:var(--primary-light); border-radius:4px; padding:2px 8px; font-size:10px; cursor:pointer; font-weight:600;" title="Click to expand all 512 dimensions">
+            ... Show All 512 Points <i class="fa-solid fa-chevron-down"></i>
+        </button>`;
+    } else {
+        // Expanded: Render all 512 points in a sleek scrollable matrix
+        pointsHtml = `
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                <span style="font-size:10px; color:var(--text-muted); font-weight:600;">Complete 512-Dimensional Vector ($D_0 \dots D_{511}$):</span>
+                <button onclick="toggleAllEnrolledEmbeddingPoints()" style="background:rgba(255,255,255,0.08); border:1px solid var(--border); color:var(--text-muted); border-radius:4px; padding:1px 6px; font-size:10px; cursor:pointer;">
+                    <i class="fa-solid fa-chevron-up"></i> Collapse
+                </button>
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(68px, 1fr)); gap:3px; max-height:180px; overflow-y:auto; padding:6px; background:rgba(0,0,0,0.3); border-radius:6px; border:1px solid var(--border);">
+                ${fullPoints.map((v, i) => {
+                    const isPos = v >= 0;
+                    const bg = isPos ? 'rgba(16, 185, 129, 0.12)' : 'rgba(59, 130, 246, 0.12)';
+                    const textCol = isPos ? '#34d399' : '#60a5fa';
+                    return `<div title="Point #${i}: ${v.toFixed(5)}" style="padding:2px 4px; background:${bg}; color:${textCol}; border-radius:3px; font-family:monospace; font-size:9px; text-align:center;">
+                        <span style="opacity:0.6; font-size:8px;">#${i}:</span> ${isPos ? '+' : ''}${v.toFixed(3)}
+                    </div>`;
+                }).join('')}
+            </div>
+        `;
+    }
+
+    previewDiv.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <strong style="color:var(--text); font-size:13px;">${data.name} (${data.student_id})</strong>
+            <span class="badge badge-present" style="font-size:10px;">L2 Norm: ${data.l2_norm.toFixed(3)}</span>
+        </div>
+        <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">
+            Dimensions: <strong>${data.dimensions}</strong> | Mean: <code>${data.stats.mean}</code> | Std: <code>${data.stats.std}</code>
+        </div>
+        <div style="font-size:10px; color:var(--text-muted); margin-bottom:4px;">Decrypted Vector Blueprint:</div>
+        <div style="line-height:1.6;">${pointsHtml}</div>
+    `;
 }
 
 function handleInspectFileSelected(event) {
@@ -923,13 +979,16 @@ function handleInspectFileSelected(event) {
                         <img src="${fullBase64}" style="width:50px; height:50px; object-fit:cover; border-radius:4px; border:1px solid var(--border);" />
                         <div style="text-align:left; font-size:11px;">
                             <strong style="color:var(--text);">${file.name}</strong><br>
-                            <span style="color:var(--text-muted);">${inspectLoadedProbeImage.width}x${inspectLoadedProbeImage.height} px | Ready to Inspect</span>
+                            <span style="color:var(--emerald);"><i class="fa-solid fa-check"></i> ${inspectLoadedProbeImage.width}x${inspectLoadedProbeImage.height} px | Uploaded</span>
                         </div>
                     </div>
                 `;
             }
             const btn = document.getElementById('btn-run-biometric-inspect');
             if (btn) btn.disabled = false;
+
+            // Auto run comparison if student is selected
+            runBiometricInspection();
         };
         inspectLoadedProbeImage.src = fullBase64;
     };
@@ -1000,11 +1059,13 @@ function captureInspectCameraFrame() {
         const btn = document.getElementById('btn-run-biometric-inspect');
         if (btn) btn.disabled = false;
         closeInspectCameraModal();
-        showToast("Probe face snapshot captured successfully!", "success");
+        showToast("Probe face snapshot captured!", "success");
+
+        // Auto run comparison
+        runBiometricInspection();
     };
     inspectLoadedProbeImage.src = fullBase64;
 }
-
 
 async function runBiometricInspection() {
     if (!inspectProbeBase64) {
@@ -1028,7 +1089,7 @@ async function runBiometricInspection() {
         });
 
         renderBiometricInspectionResults(res);
-        showToast("Biometric inspection and similarity comparison complete!", "success");
+        showToast("Biometric comparison & attendance confidence score calculated!", "success");
     } catch (err) {
         showToast("Inspection Failed: " + err.message, "error");
     } finally {
@@ -1048,23 +1109,28 @@ function renderBiometricInspectionResults(data) {
     const target = data.target_comparison;
     const ranked = data.ranked_matches || [];
 
-    // 1. Metric Banners
+    // 1. Top Comparison Metric Banners with Attendance Confidence Score
     const banner = document.getElementById('inspect-metrics-banner');
     if (banner) {
         let matchStatusHtml = '';
         if (target) {
             const isMatch = target.is_match;
+            const simScore = target.cosine_similarity;
+            const attendanceVerdict = isMatch ? 'PRESENT' : 'UNRESOLVED';
+            const verdictColor = isMatch ? 'var(--emerald)' : 'var(--rose)';
+
             matchStatusHtml = `
-                <div class="stat-card" style="border-left:4px solid ${isMatch ? 'var(--emerald)' : 'var(--rose)'};">
-                    <div class="stat-label">Match vs ${target.student_name}</div>
-                    <div class="stat-value" style="font-size:18px; color:${isMatch ? 'var(--emerald)' : 'var(--rose)'};">
-                        ${isMatch ? '<i class="fa-solid fa-circle-check"></i> VERIFIED MATCH' : '<i class="fa-solid fa-circle-xmark"></i> MISMATCH'}
+                <div class="stat-card" style="border-left:4px solid ${verdictColor};">
+                    <div class="stat-label">Attendance Match Verdict</div>
+                    <div class="stat-value" style="font-size:18px; color:${verdictColor};">
+                        ${isMatch ? '<i class="fa-solid fa-circle-check"></i> ' + attendanceVerdict : '<i class="fa-solid fa-circle-xmark"></i> ' + attendanceVerdict}
                     </div>
+                    <div style="font-size:10px; color:var(--text-muted);">${isMatch ? 'Eligible for Automatic Attendance' : 'Below 0.50 Match Threshold'}</div>
                 </div>
                 <div class="stat-card" style="border-left:4px solid var(--primary-light);">
-                    <div class="stat-label">Cosine Similarity</div>
-                    <div class="stat-value" style="font-size:22px; color:var(--primary-light);">${target.match_percent}%</div>
-                    <div style="font-size:10px; color:var(--text-muted);">Threshold: &ge; 50.0%</div>
+                    <div class="stat-label">Match Confidence Score</div>
+                    <div class="stat-value" style="font-size:22px; color:var(--primary-light);">${target.match_percent}% <span style="font-size:14px; opacity:0.8;">(${simScore.toFixed(4)})</span></div>
+                    <div style="font-size:10px; color:var(--text-muted);">Threshold: &ge; 50.0% (0.5000)</div>
                 </div>
                 <div class="stat-card" style="border-left:4px solid var(--amber);">
                     <div class="stat-label">Angular Separation ($\theta$)</div>
@@ -1081,12 +1147,13 @@ function renderBiometricInspectionResults(data) {
                     <div style="font-size:10px; color:var(--text-muted);">${topMatch ? topMatch.student_id : ''}</div>
                 </div>
                 <div class="stat-card" style="border-left:4px solid ${topMatch && topMatch.is_match ? 'var(--emerald)' : 'var(--text-muted)'};">
-                    <div class="stat-label">Top Similarity</div>
-                    <div class="stat-value" style="font-size:22px; color:${topMatch && topMatch.is_match ? 'var(--emerald)' : 'var(--text-muted)'};">${topMatch ? topMatch.match_percent : 0}%</div>
+                    <div class="stat-label">Match Confidence Score</div>
+                    <div class="stat-value" style="font-size:22px; color:${topMatch && topMatch.is_match ? 'var(--emerald)' : 'var(--text-muted)'};">${topMatch ? topMatch.match_percent : 0}% (${topMatch ? topMatch.similarity.toFixed(4) : '0.0000'})</div>
+                    <div style="font-size:10px; color:var(--text-muted);">Threshold: &ge; 50.0% (0.5000)</div>
                 </div>
                 <div class="stat-card" style="border-left:4px solid var(--amber);">
                     <div class="stat-label">Candidate Match State</div>
-                    <div class="stat-value" style="font-size:16px;">${topMatch && topMatch.is_match ? 'MATCH FOUND' : 'UNKNOWN FACE'}</div>
+                    <div class="stat-value" style="font-size:16px;">${topMatch && topMatch.is_match ? 'MATCH FOUND (PRESENT)' : 'UNKNOWN FACE (UNRESOLVED)'}</div>
                 </div>
             `;
         }
@@ -1136,7 +1203,7 @@ function renderBiometricInspectionResults(data) {
     if (qDiv) {
         qDiv.innerHTML = `
             <span>Quality Tier: <strong>${probe.quality.tier}</strong></span>
-            <span>Sharpness Blur: <strong>${probe.quality.blur_score}</strong></span>
+            <span>Sharpness: <strong>${probe.quality.blur_score}</strong></span>
             <span>Brightness: <strong>${probe.quality.brightness_mean}</strong></span>
         `;
     }
@@ -1154,7 +1221,6 @@ function renderBiometricInspectionResults(data) {
         const samplePoints = probe.vector_full ? probe.vector_full.slice(0, 128) : probe.vector_sample;
         let cellsHtml = '';
         samplePoints.forEach((val, idx) => {
-            // Color map: negative = cyan/blue, 0 = dark, positive = purple/rose/emerald
             let bg = 'rgba(255,255,255,0.05)';
             if (val > 0.05) bg = `rgba(16, 185, 129, ${Math.min(1.0, val * 8)})`;
             else if (val < -0.05) bg = `rgba(59, 130, 246, ${Math.min(1.0, Math.abs(val) * 8)})`;
@@ -1167,12 +1233,72 @@ function renderBiometricInspectionResults(data) {
     const vStatsDiv = document.getElementById('inspect-vector-stats');
     if (vStatsDiv) {
         vStatsDiv.innerHTML = `
-            <strong>Vector Dimensions:</strong> 512 float32 | <strong>L2 Norm:</strong> ${probe.l2_norm.toFixed(4)}<br>
+            <strong>Probe Vector Dimensions:</strong> 512 float32 | <strong>L2 Norm:</strong> ${probe.l2_norm.toFixed(4)}<br>
             <strong>Mean:</strong> ${probe.stats.mean} | <strong>Std Dev:</strong> ${probe.stats.std} | <strong>Min:</strong> ${probe.stats.min} | <strong>Max:</strong> ${probe.stats.max}
         `;
     }
 
-    // 4. Ranked Matches Table
+    // 4. Point-by-Point Vector Comparison Matrix (if target selected)
+    const matrixContainer = document.getElementById('inspect-point-comparison-container');
+    if (matrixContainer) {
+        if (target && target.enrolled_vector_full && probe.vector_full) {
+            matrixContainer.style.display = 'block';
+            const ePoints = target.enrolled_vector_full;
+            const pPoints = probe.vector_full;
+            const diffs = target.diff_vector_full || [];
+
+            let rowsHtml = '';
+            for (let i = 0; i < Math.min(64, ePoints.length); i++) {
+                const ep = ePoints[i];
+                const pp = pPoints[i];
+                const delta = diffs[i] !== undefined ? diffs[i] : Math.abs(ep - pp);
+                const prod = ep * pp;
+                const isClose = delta < 0.8;
+
+                rowsHtml += `
+                    <tr>
+                        <td><strong>#${i}</strong></td>
+                        <td style="font-family:monospace; color:${ep >= 0 ? '#34d399' : '#60a5fa'};">${ep >= 0 ? '+' : ''}${ep.toFixed(4)}</td>
+                        <td style="font-family:monospace; color:${pp >= 0 ? '#34d399' : '#60a5fa'};">${pp >= 0 ? '+' : ''}${pp.toFixed(4)}</td>
+                        <td style="font-family:monospace; color:${isClose ? 'var(--emerald)' : 'var(--amber)'};">${delta.toFixed(4)}</td>
+                        <td style="font-family:monospace; color:${prod > 0 ? 'var(--emerald)' : 'var(--rose)'};">${prod >= 0 ? '+' : ''}${prod.toFixed(4)}</td>
+                    </tr>
+                `;
+            }
+
+            matrixContainer.innerHTML = `
+                <div class="card" style="background:var(--bg-card); padding:12px; margin-bottom:16px;">
+                    <div style="font-size:12px; font-weight:600; color:var(--text); margin-bottom:8px; display:flex; justify-content:space-between;">
+                        <span><i class="fa-solid fa-code-compare" style="color:var(--primary-light);"></i> Point-by-Point 512-D Embedding Comparison (${target.student_name} vs Uploaded Probe)</span>
+                        <span class="badge ${target.is_match ? 'badge-present' : 'badge-absent'}">Match: ${target.match_percent}%</span>
+                    </div>
+                    <p style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
+                        Showing first 64 dimensions. $A_i$ = Enrolled Template, $B_i$ = Probe Face. Dot product contribution $\sum A_i \cdot B_i$ determines the Cosine Match Score (${target.cosine_similarity.toFixed(4)}).
+                    </p>
+                    <div class="table-responsive" style="max-height:220px; overflow-y:auto;">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Dimension</th>
+                                    <th>Enrolled ($A_i$)</th>
+                                    <th>Probe ($B_i$)</th>
+                                    <th>Delta ($|A_i - B_i|$)</th>
+                                    <th>Contribution ($A_i \cdot B_i$)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${rowsHtml}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        } else {
+            matrixContainer.style.display = 'none';
+        }
+    }
+
+    // 5. Ranked Matches Table
     const tbody = document.getElementById('inspect-ranked-tbody');
     if (tbody) {
         if (ranked.length === 0) {
@@ -1199,7 +1325,7 @@ function renderBiometricInspectionResults(data) {
                     </td>
                     <td>
                         <span class="badge ${isMatch ? 'badge-present' : 'badge-absent'}">
-                            ${isMatch ? 'MATCH' : 'DIFFERENT'}
+                            ${isMatch ? 'PRESENT' : 'UNRESOLVED'}
                         </span>
                     </td>
                 </tr>
@@ -1208,6 +1334,7 @@ function renderBiometricInspectionResults(data) {
         tbody.innerHTML = rHtml;
     }
 }
+
 
 async function submitStaffOverride(e) {
     e.preventDefault();
@@ -1608,6 +1735,7 @@ window.renderUnknowns = renderUnknowns;
 window.renderAdminPanel = renderAdminPanel;
 window.populateInspectStudentDropdown = populateInspectStudentDropdown;
 window.loadEnrolledEmbeddingDetails = loadEnrolledEmbeddingDetails;
+window.toggleAllEnrolledEmbeddingPoints = toggleAllEnrolledEmbeddingPoints;
 window.handleInspectFileSelected = handleInspectFileSelected;
 window.openInspectCameraModal = openInspectCameraModal;
 window.closeInspectCameraModal = closeInspectCameraModal;
