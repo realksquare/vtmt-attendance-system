@@ -942,6 +942,7 @@ def clear_today_unknowns(admin_name: str = "Admin"):
 class BiometricInspectRequest(BaseModel):
     image_base64: str
     target_student_id: Optional[str] = None
+    selected_face_index: Optional[int] = None
 
 
 @app.get("/api/admin/biometrics/template/{student_id}")
@@ -987,8 +988,9 @@ def get_enrolled_embedding_template(student_id: str):
 @app.post("/api/admin/biometrics/inspect")
 def inspect_and_compare_biometrics(req: BiometricInspectRequest):
     """
-    Admin-only: Extracts 512-D embedding and 106 landmarks from an uploaded inspection image,
-    and compares against enrolled templates with Cosine Similarity, Angular Distance, and Heatmap data.
+    Admin-only: Scans all detected faces in a probe image (single or multi-probe),
+    maps and identifies the selected enrolled student among all detected faces,
+    and returns 512-D embeddings, 106 landmarks, and point-by-point comparison matrix.
     """
     try:
         img_data = base64.b64decode(req.image_base64)
@@ -1005,28 +1007,119 @@ def inspect_and_compare_biometrics(req: BiometricInspectRequest):
     if not faces or len(faces) == 0:
         raise HTTPException(status_code=400, detail="No face detected in the uploaded image. Please ensure the face is clearly visible.")
 
-    face = faces[0]
-    box = face.bbox.astype(int).tolist()
-    embedding = face.embedding
-    emb_list = embedding.tolist()
-
-    # Extract landmarks
-    landmarks_106 = []
-    if hasattr(face, "landmark_2d_106") and getattr(face, "landmark_2d_106") is not None:
-        lmk = getattr(face, "landmark_2d_106")
-        landmarks_106 = lmk.astype(int).tolist()
-
-    # Quality & PAD Assessment
-    quality_res = rec.quality_analyzer.assess_face(frame, face)
-    pad_res = rec.pad_engine.verify(frame, np.array(box))
-
     key = get_or_create_key()
     templates = get_all_decrypted_templates(key)
 
-    # Rank all enrolled students by Cosine Similarity
+    # Process all detected faces in the image
+    detected_faces_summary = []
+    target_template = next((t for t in templates if t[0] == req.target_student_id), None) if req.target_student_id else None
+
+    for idx, f in enumerate(faces):
+        f_box = f.bbox.astype(int).tolist()
+        f_emb = f.embedding
+        
+        # Landmarks
+        f_lmk = []
+        if hasattr(f, "landmark_2d_106") and getattr(f, "landmark_2d_106") is not None:
+            f_lmk = getattr(f, "landmark_2d_106").astype(int).tolist()
+
+        # Quality & PAD
+        q_res = rec.quality_analyzer.assess_face(frame, f)
+        p_res = rec.pad_engine.verify(frame, np.array(f_box))
+
+        # Target similarity if student selected
+        target_sim = 0.0
+        if target_template:
+            target_sim = float(rec.cosine_similarity(f_emb, target_template[2]))
+
+        # Top match candidate across database
+        top_cand_id, top_cand_name, top_cand_sim = None, None, 0.0
+        for sid, sname, enrolled_emb in templates:
+            sim = float(rec.cosine_similarity(f_emb, enrolled_emb))
+            if sim > top_cand_sim:
+                top_cand_sim = sim
+                top_cand_id = sid
+                top_cand_name = sname
+
+        detected_faces_summary.append({
+            "face_index": idx,
+            "bbox": f_box,
+            "landmarks_count": len(f_lmk),
+            "landmarks_106": f_lmk,
+            "embedding": f_emb,
+            "target_similarity": round(target_sim, 4),
+            "target_match_percent": round(target_sim * 100, 1),
+            "is_target_match": bool(target_sim >= MATCH_THRESHOLD),
+            "top_candidate": {
+                "student_id": top_cand_id,
+                "student_name": top_cand_name,
+                "similarity": round(top_cand_sim, 4),
+                "match_percent": round(top_cand_sim * 100, 1),
+                "is_match": bool(top_cand_sim >= MATCH_THRESHOLD)
+            },
+            "quality": {
+                "tier": q_res.tier.value if hasattr(q_res.tier, 'value') else str(q_res.tier),
+                "passed": q_res.passed,
+                "blur_score": round(q_res.blur_score, 1),
+                "brightness_mean": round(q_res.brightness_mean, 1)
+            },
+            "pad": {
+                "passed": p_res.passed,
+                "score": round(p_res.score, 3)
+            }
+        })
+
+    # Choose active face to inspect
+    if req.selected_face_index is not None and 0 <= req.selected_face_index < len(faces):
+        active_idx = req.selected_face_index
+    elif req.target_student_id:
+        # Multi-probe intelligent mapping: auto-focus on the face matching the selected enrolled student
+        active_idx = max(range(len(detected_faces_summary)), key=lambda i: detected_faces_summary[i]["target_similarity"])
+    else:
+        active_idx = 0
+
+    active_face_data = detected_faces_summary[active_idx]
+    active_face_obj = faces[active_idx]
+    active_emb = active_face_obj.embedding
+    active_emb_list = active_emb.tolist()
+
+    # Detailed comparison against target student for the active face
+    target_comparison = None
+    if target_template:
+        t_id, t_name, t_emb = target_template
+        sim = float(rec.cosine_similarity(active_emb, t_emb))
+        clamped_sim = max(-1.0, min(1.0, sim))
+        angle_rad = math.acos(clamped_sim)
+        angle_deg = math.degrees(angle_rad)
+        euclidean_dist = float(np.linalg.norm(active_emb - t_emb))
+
+        t_emb_list = t_emb.tolist()
+        diff_vector = [round(abs(float(a) - float(b)), 4) for a, b in zip(active_emb_list, t_emb_list)]
+
+        target_comparison = {
+            "student_id": t_id,
+            "student_name": t_name,
+            "cosine_similarity": round(sim, 4),
+            "match_percent": round(sim * 100, 1),
+            "angular_separation_deg": round(angle_deg, 2),
+            "euclidean_distance": round(euclidean_dist, 4),
+            "is_match": bool(sim >= MATCH_THRESHOLD),
+            "enrolled_vector_sample": [round(x, 4) for x in t_emb_list[:32]],
+            "enrolled_vector_full": [round(x, 5) for x in t_emb_list],
+            "diff_vector_sample": diff_vector[:32],
+            "diff_vector_full": diff_vector,
+            "enrolled_stats": {
+                "mean": round(float(np.mean(t_emb)), 5),
+                "std": round(float(np.std(t_emb)), 5),
+                "min": round(float(np.min(t_emb)), 5),
+                "max": round(float(np.max(t_emb)), 5)
+            }
+        }
+
+    # Ranked comparison against all enrolled students for active face
     ranked_matches = []
     for sid, sname, enrolled_emb in templates:
-        sim = rec.cosine_similarity(embedding, enrolled_emb)
+        sim = rec.cosine_similarity(active_emb, enrolled_emb)
         ranked_matches.append({
             "student_id": sid,
             "student_name": sname,
@@ -1034,76 +1127,49 @@ def inspect_and_compare_biometrics(req: BiometricInspectRequest):
             "match_percent": round(float(sim) * 100, 1),
             "is_match": bool(sim >= MATCH_THRESHOLD)
         })
-
     ranked_matches.sort(key=lambda x: x["similarity"], reverse=True)
 
-    # Detailed comparison against target student if specified
-    target_comparison = None
-    if req.target_student_id:
-        target_template = next((t for t in templates if t[0] == req.target_student_id), None)
-        if target_template:
-            t_id, t_name, t_emb = target_template
-            sim = float(rec.cosine_similarity(embedding, t_emb))
-            clamped_sim = max(-1.0, min(1.0, sim))
-            angle_rad = math.acos(clamped_sim)
-            angle_deg = math.degrees(angle_rad)
-            euclidean_dist = float(np.linalg.norm(embedding - t_emb))
-
-            t_emb_list = t_emb.tolist()
-            # Compute element-wise absolute difference
-            diff_vector = [round(abs(float(a) - float(b)), 4) for a, b in zip(emb_list, t_emb_list)]
-
-            target_comparison = {
-                "student_id": t_id,
-                "student_name": t_name,
-                "cosine_similarity": round(sim, 4),
-                "match_percent": round(sim * 100, 1),
-                "angular_separation_deg": round(angle_deg, 2),
-                "euclidean_distance": round(euclidean_dist, 4),
-                "is_match": bool(sim >= MATCH_THRESHOLD),
-                "enrolled_vector_sample": [round(x, 4) for x in t_emb_list[:32]],
-                "enrolled_vector_full": [round(x, 5) for x in t_emb_list],
-                "diff_vector_sample": diff_vector[:32],
-                "diff_vector_full": diff_vector,
-                "enrolled_stats": {
-                    "mean": round(float(np.mean(t_emb)), 5),
-                    "std": round(float(np.std(t_emb)), 5),
-                    "min": round(float(np.min(t_emb)), 5),
-                    "max": round(float(np.max(t_emb)), 5)
-                }
-            }
+    # Clean serializable list for all faces summary
+    clean_all_faces = []
+    for f_info in detected_faces_summary:
+        clean_all_faces.append({
+            "face_index": f_info["face_index"],
+            "bbox": f_info["bbox"],
+            "landmarks_count": f_info["landmarks_count"],
+            "target_similarity": f_info["target_similarity"],
+            "target_match_percent": f_info["target_match_percent"],
+            "is_target_match": f_info["is_target_match"],
+            "top_candidate": f_info["top_candidate"],
+            "quality": f_info["quality"],
+            "pad": f_info["pad"]
+        })
 
     return {
         "status": "success",
+        "total_faces_detected": len(faces),
+        "active_face_index": active_idx,
+        "all_faces": clean_all_faces,
         "probe_face": {
-            "bbox": box,
-            "landmarks_count": len(landmarks_106),
-            "landmarks_106": landmarks_106,
-            "dimensions": len(emb_list),
-            "l2_norm": float(np.linalg.norm(embedding)),
-            "vector_sample": [round(x, 4) for x in emb_list[:32]],
-            "vector_full": [round(x, 5) for x in emb_list],
+            "face_index": active_idx,
+            "bbox": active_face_data["bbox"],
+            "landmarks_count": active_face_data["landmarks_count"],
+            "landmarks_106": active_face_data["landmarks_106"],
+            "dimensions": len(active_emb_list),
+            "l2_norm": float(np.linalg.norm(active_emb)),
+            "vector_sample": [round(x, 4) for x in active_emb_list[:32]],
+            "vector_full": [round(x, 5) for x in active_emb_list],
             "stats": {
-                "mean": round(float(np.mean(embedding)), 5),
-                "std": round(float(np.std(embedding)), 5),
-                "min": round(float(np.min(embedding)), 5),
-                "max": round(float(np.max(embedding)), 5)
+                "mean": round(float(np.mean(active_emb)), 5),
+                "std": round(float(np.std(active_emb)), 5),
+                "min": round(float(np.min(active_emb)), 5),
+                "max": round(float(np.max(active_emb)), 5)
             },
-            "quality": {
-                "tier": quality_res.tier.value if hasattr(quality_res.tier, 'value') else str(quality_res.tier),
-                "passed": quality_res.passed,
-                "blur_score": round(quality_res.blur_score, 1),
-                "brightness_mean": round(quality_res.brightness_mean, 1),
-                "reason": quality_res.reason
-            },
-            "pad": {
-                "passed": pad_res.passed,
-                "score": round(pad_res.score, 3),
-                "reason": pad_res.reason
-            }
+            "quality": active_face_data["quality"],
+            "pad": active_face_data["pad"]
         },
         "target_comparison": target_comparison,
-        "ranked_matches": ranked_matches[:10]  # Top 10 matches
+        "ranked_matches": ranked_matches[:10]
     }
+
 
 

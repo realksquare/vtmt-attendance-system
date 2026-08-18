@@ -450,6 +450,21 @@
                         Inspect decrypted 512-dimensional facial embedding vectors, upload probe images, visualize 106 landmark points, and compare mathematical cosine similarities and angular distances against enrolled profiles.
                     </p>
 
+                    <!-- Mode Selector Bar -->
+                    <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.02); border:1px solid var(--border); border-radius:8px; padding:8px 12px; margin-bottom:14px;">
+                        <span style="font-size:12px; font-weight:600; color:var(--text);">
+                            <i class="fa-solid fa-sliders" style="color:var(--primary-light);"></i> Inspection Mode:
+                        </span>
+                        <div style="display:flex; gap:6px;">
+                            <button type="button" id="btn-mode-single" class="btn btn-secondary" onclick="switchInspectMode('single')" style="padding:4px 10px; font-size:11px;">
+                                <i class="fa-solid fa-user"></i> Single Probe
+                            </button>
+                            <button type="button" id="btn-mode-multi" class="btn btn-primary" onclick="switchInspectMode('multi')" style="padding:4px 10px; font-size:11px;">
+                                <i class="fa-solid fa-users-viewfinder"></i> Multi-Probe Group Scan
+                            </button>
+                        </div>
+                    </div>
+
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
                         <!-- Enrolled Student Selection -->
                         <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border); border-radius:8px; padding:12px;">
@@ -497,6 +512,11 @@
                     <!-- Inspection Results Section (Hidden until run) -->
                     <div id="inspect-results-container" style="display:none; margin-top:16px;">
                         <hr style="border:0; border-top:1px solid var(--border); margin:16px 0;">
+
+                        <!-- Multi-Face Selection Bar (Visible when multiple faces detected) -->
+                        <div id="inspect-multi-faces-bar" style="display:none; background:rgba(99,102,241,0.08); border:1px solid rgba(99,102,241,0.3); border-radius:8px; padding:10px 12px; margin-bottom:14px;">
+                            <!-- Populated with face chips -->
+                        </div>
                         
                         <!-- Top Comparison Metric Banners -->
                         <div id="inspect-metrics-banner" style="display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; margin-bottom:16px;">
@@ -831,6 +851,6 @@
             navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW failed:', err));
         }
     </script>
-    <script type="module" src="/web/js/app.js?v=14.0"></script>
+    <script type="module" src="/web/js/app.js?v=15.0"></script>
 </body>
 </html>

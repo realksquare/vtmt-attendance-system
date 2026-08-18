@@ -1067,7 +1067,36 @@ function captureInspectCameraFrame() {
     inspectLoadedProbeImage.src = fullBase64;
 }
 
-async function runBiometricInspection() {
+let inspectMode = 'multi';
+let currentSelectedFaceIndex = null;
+let lastInspectionResult = null;
+
+function switchInspectMode(mode) {
+    inspectMode = mode;
+    const btnSingle = document.getElementById('btn-mode-single');
+    const btnMulti = document.getElementById('btn-mode-multi');
+
+    if (btnSingle && btnMulti) {
+        if (mode === 'single') {
+            btnSingle.className = 'btn btn-primary';
+            btnMulti.className = 'btn btn-secondary';
+        } else {
+            btnSingle.className = 'btn btn-secondary';
+            btnMulti.className = 'btn btn-primary';
+        }
+    }
+
+    if (inspectProbeBase64) {
+        runBiometricInspection();
+    }
+}
+
+function selectMultiProbeFace(faceIdx) {
+    currentSelectedFaceIndex = faceIdx;
+    runBiometricInspection(faceIdx);
+}
+
+async function runBiometricInspection(selectedFaceIdx = null) {
     if (!inspectProbeBase64) {
         showToast("Please upload or capture a probe face image first.", "error");
         return;
@@ -1079,17 +1108,19 @@ async function runBiometricInspection() {
     const btn = document.getElementById('btn-run-biometric-inspect');
     if (btn) {
         btn.disabled = true;
-        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Extracting ArcFace Embeddings & Landmarks...';
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Scanning Faces & Extracting 512-D Embeddings...';
     }
 
     try {
         const res = await API.inspectBiometrics({
             image_base64: inspectProbeBase64,
-            target_student_id: targetStudentId || null
+            target_student_id: targetStudentId || null,
+            selected_face_index: selectedFaceIdx !== null ? selectedFaceIdx : (inspectMode === 'single' ? 0 : null)
         });
 
+        lastInspectionResult = res;
         renderBiometricInspectionResults(res);
-        showToast("Biometric comparison & attendance confidence score calculated!", "success");
+        showToast(`Processed ${res.total_faces_detected} face(s) in ${inspectMode === 'multi' ? 'Multi-Probe' : 'Single-Probe'} mode!`, "success");
     } catch (err) {
         showToast("Inspection Failed: " + err.message, "error");
     } finally {
@@ -1108,6 +1139,45 @@ function renderBiometricInspectionResults(data) {
     const probe = data.probe_face;
     const target = data.target_comparison;
     const ranked = data.ranked_matches || [];
+    const allFaces = data.all_faces || [];
+    const activeIdx = data.active_face_index || 0;
+
+    // 0. Multi-Face Chips Toolbar
+    const multiBar = document.getElementById('inspect-multi-faces-bar');
+    if (multiBar) {
+        if (data.total_faces_detected > 1 || inspectMode === 'multi') {
+            multiBar.style.display = 'block';
+            let chipsHtml = `
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                    <strong style="font-size:12px; color:var(--text);"><i class="fa-solid fa-users-viewfinder" style="color:var(--primary-light);"></i> Detected ${data.total_faces_detected} Face(s) in Probe Image:</strong>
+                    <span style="font-size:10px; color:var(--text-muted);">Click any detected face to map & inspect its 512-D vector:</span>
+                </div>
+                <div style="display:flex; flex-wrap:wrap; gap:8px;">
+            `;
+
+            allFaces.forEach(f => {
+                const isActive = (f.face_index === activeIdx);
+                const isTargetMatch = f.is_target_match;
+                const topCand = f.top_candidate;
+                
+                let borderCol = isActive ? 'var(--emerald)' : 'var(--border)';
+                let bgCol = isActive ? 'rgba(16,185,129,0.18)' : 'rgba(255,255,255,0.04)';
+                let tagBadge = isTargetMatch ? `<span class="badge badge-present" style="font-size:9px;">TARGET MATCH (${f.target_match_percent}%)</span>` : `<span style="font-size:10px; color:var(--text-muted);">${f.target_match_percent}% match</span>`;
+
+                chipsHtml += `
+                    <button type="button" onclick="selectMultiProbeFace(${f.face_index})" style="background:${bgCol}; border:1px solid ${borderCol}; border-radius:6px; padding:5px 10px; display:flex; align-items:center; gap:8px; cursor:pointer; color:var(--text); font-size:11px;">
+                        <strong>Face #${f.face_index + 1}</strong>
+                        ${tagBadge}
+                        ${isActive ? '<i class="fa-solid fa-check" style="color:var(--emerald);"></i>' : ''}
+                    </button>
+                `;
+            });
+            chipsHtml += `</div>`;
+            multiBar.innerHTML = chipsHtml;
+        } else {
+            multiBar.style.display = 'none';
+        }
+    }
 
     // 1. Top Comparison Metric Banners with Attendance Confidence Score
     const banner = document.getElementById('inspect-metrics-banner');
@@ -1125,7 +1195,7 @@ function renderBiometricInspectionResults(data) {
                     <div class="stat-value" style="font-size:18px; color:${verdictColor};">
                         ${isMatch ? '<i class="fa-solid fa-circle-check"></i> ' + attendanceVerdict : '<i class="fa-solid fa-circle-xmark"></i> ' + attendanceVerdict}
                     </div>
-                    <div style="font-size:10px; color:var(--text-muted);">${isMatch ? 'Eligible for Automatic Attendance' : 'Below 0.50 Match Threshold'}</div>
+                    <div style="font-size:10px; color:var(--text-muted);">${isMatch ? 'Mapped to Enrolled Profile' : 'Below 0.50 Match Threshold'}</div>
                 </div>
                 <div class="stat-card" style="border-left:4px solid var(--primary-light);">
                     <div class="stat-label">Match Confidence Score</div>
@@ -1135,7 +1205,7 @@ function renderBiometricInspectionResults(data) {
                 <div class="stat-card" style="border-left:4px solid var(--amber);">
                     <div class="stat-label">Angular Separation ($\theta$)</div>
                     <div class="stat-value" style="font-size:20px; color:var(--amber);">${target.angular_separation_deg}&deg;</div>
-                    <div style="font-size:10px; color:var(--text-muted);">Euclidean: ${target.euclidean_distance}</div>
+                    <div style="font-size:10px; color:var(--text-muted);">Active Face: #${activeIdx + 1} of ${data.total_faces_detected}</div>
                 </div>
             `;
         } else {
@@ -1170,7 +1240,7 @@ function renderBiometricInspectionResults(data) {
         `;
     }
 
-    // 2. Draw Landmarks on Canvas
+    // 2. Draw Multi-Face Bounding Boxes & Landmarks on Canvas
     const canvas = document.getElementById('inspect-landmarks-canvas');
     if (canvas && inspectLoadedProbeImage) {
         canvas.width = inspectLoadedProbeImage.width;
@@ -1178,15 +1248,50 @@ function renderBiometricInspectionResults(data) {
         const ctx = canvas.getContext('2d');
         ctx.drawImage(inspectLoadedProbeImage, 0, 0);
 
-        // Draw Bounding Box
+        const strokeScale = Math.max(2, Math.floor(canvas.width / 220));
+        const fontSize = Math.max(12, Math.floor(canvas.width / 40));
+        ctx.font = `bold ${fontSize}px sans-serif`;
+
+        // In Multi-Probe mode, draw bounding boxes for ALL detected faces
+        if (inspectMode === 'multi' && allFaces.length > 1) {
+            allFaces.forEach(f => {
+                const [fx1, fy1, fx2, fy2] = f.bbox;
+                const isThisActive = (f.face_index === activeIdx);
+                const isMatch = f.is_target_match;
+
+                if (!isThisActive) {
+                    // Non-active face: Draw yellow/cyan box
+                    ctx.strokeStyle = isMatch ? 'rgba(34, 197, 94, 0.7)' : 'rgba(234, 179, 8, 0.7)';
+                    ctx.lineWidth = strokeScale;
+                    ctx.strokeRect(fx1, fy1, fx2 - fx1, fy2 - fy1);
+
+                    // Label tag
+                    const labelText = `Face #${f.face_index + 1} (${f.target_match_percent}%)`;
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                    ctx.fillRect(fx1, Math.max(0, fy1 - fontSize - 6), ctx.measureText(labelText).width + 8, fontSize + 6);
+                    ctx.fillStyle = isMatch ? '#34d399' : '#fde047';
+                    ctx.fillText(labelText, fx1 + 4, Math.max(fontSize, fy1 - 4));
+                }
+            });
+        }
+
+        // Draw ACTIVE Selected Face with bright green box and 106 landmark dots
         if (probe.bbox && probe.bbox.length === 4) {
             const [x1, y1, x2, y2] = probe.bbox;
             ctx.strokeStyle = '#22c55e';
-            ctx.lineWidth = Math.max(2, Math.floor(canvas.width / 200));
+            ctx.lineWidth = strokeScale + 1;
             ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+
+            // Active Banner Label
+            const targetName = target ? target.student_name : `Face #${activeIdx + 1}`;
+            const activeLabel = target && target.is_match ? `✔ ACTIVE MATCH: ${targetName} (${target.match_percent}%)` : `ACTIVE: ${targetName} (${target ? target.match_percent + '%' : 'Inspecting'})`;
+            ctx.fillStyle = 'rgba(16, 185, 129, 0.9)';
+            ctx.fillRect(x1, Math.max(0, y1 - fontSize - 8), ctx.measureText(activeLabel).width + 12, fontSize + 8);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(activeLabel, x1 + 6, Math.max(fontSize, y1 - 4));
         }
 
-        // Draw 106 Landmark Dots
+        // Draw 106 Landmark Dots on Active Face
         if (probe.landmarks_106 && probe.landmarks_106.length > 0) {
             ctx.fillStyle = '#06b6d4';
             const radius = Math.max(1.5, canvas.width / 240);
@@ -1215,7 +1320,7 @@ function renderBiometricInspectionResults(data) {
         padBadgeElem.textContent = probe.pad.passed ? `LIVE (${probe.pad.score})` : `SPOOF (${probe.pad.score})`;
     }
 
-    // 3. Vector Heatmap
+    // 3. Vector Heatmap for Active Face
     const heatmapDiv = document.getElementById('inspect-vector-heatmap');
     if (heatmapDiv) {
         const samplePoints = probe.vector_full ? probe.vector_full.slice(0, 128) : probe.vector_sample;
@@ -1233,7 +1338,7 @@ function renderBiometricInspectionResults(data) {
     const vStatsDiv = document.getElementById('inspect-vector-stats');
     if (vStatsDiv) {
         vStatsDiv.innerHTML = `
-            <strong>Probe Vector Dimensions:</strong> 512 float32 | <strong>L2 Norm:</strong> ${probe.l2_norm.toFixed(4)}<br>
+            <strong>Active Face Vector (Face #${activeIdx + 1}):</strong> 512 float32 | <strong>L2 Norm:</strong> ${probe.l2_norm.toFixed(4)}<br>
             <strong>Mean:</strong> ${probe.stats.mean} | <strong>Std Dev:</strong> ${probe.stats.std} | <strong>Min:</strong> ${probe.stats.min} | <strong>Max:</strong> ${probe.stats.max}
         `;
     }
@@ -1269,11 +1374,11 @@ function renderBiometricInspectionResults(data) {
             matrixContainer.innerHTML = `
                 <div class="card" style="background:var(--bg-card); padding:12px; margin-bottom:16px;">
                     <div style="font-size:12px; font-weight:600; color:var(--text); margin-bottom:8px; display:flex; justify-content:space-between;">
-                        <span><i class="fa-solid fa-code-compare" style="color:var(--primary-light);"></i> Point-by-Point 512-D Embedding Comparison (${target.student_name} vs Uploaded Probe)</span>
+                        <span><i class="fa-solid fa-code-compare" style="color:var(--primary-light);"></i> Point-by-Point 512-D Embedding Comparison (${target.student_name} vs Active Face #${activeIdx + 1})</span>
                         <span class="badge ${target.is_match ? 'badge-present' : 'badge-absent'}">Match: ${target.match_percent}%</span>
                     </div>
                     <p style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">
-                        Showing first 64 dimensions. $A_i$ = Enrolled Template, $B_i$ = Probe Face. Dot product contribution $\sum A_i \cdot B_i$ determines the Cosine Match Score (${target.cosine_similarity.toFixed(4)}).
+                        Showing first 64 dimensions. $A_i$ = Enrolled Template (${target.student_name}), $B_i$ = Active Face #${activeIdx + 1}. Dot product contribution $\sum A_i \cdot B_i$ determines the Cosine Match Score (${target.cosine_similarity.toFixed(4)}).
                     </p>
                     <div class="table-responsive" style="max-height:220px; overflow-y:auto;">
                         <table>
@@ -1297,6 +1402,44 @@ function renderBiometricInspectionResults(data) {
             matrixContainer.style.display = 'none';
         }
     }
+
+    // 5. Ranked Matches Table
+    const tbody = document.getElementById('inspect-ranked-tbody');
+    if (tbody) {
+        if (ranked.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;">No enrolled students found to compare against.</td></tr>';
+            return;
+        }
+
+        let rHtml = '';
+        ranked.forEach((r, index) => {
+            const isMatch = r.is_match;
+            rHtml += `
+                <tr style="${index === 0 && isMatch ? 'background:rgba(16,185,129,0.08); font-weight:600;' : ''}">
+                    <td><strong>#${index + 1}</strong></td>
+                    <td><code>${r.student_id}</code></td>
+                    <td>${r.student_name}</td>
+                    <td><strong>${r.similarity.toFixed(4)}</strong></td>
+                    <td>
+                        <div style="display:flex; align-items:center; gap:6px;">
+                            <div style="flex:1; background:var(--border); height:6px; border-radius:3px; overflow:hidden; width:60px;">
+                                <div style="width:${Math.max(0, r.match_percent)}%; background:${isMatch ? 'var(--emerald)' : 'var(--primary-light)'}; height:100%;"></div>
+                            </div>
+                            <span>${r.match_percent}%</span>
+                        </div>
+                    </td>
+                    <td>
+                        <span class="badge ${isMatch ? 'badge-present' : 'badge-absent'}">
+                            ${isMatch ? 'PRESENT' : 'UNRESOLVED'}
+                        </span>
+                    </td>
+                </tr>
+            `;
+        });
+        tbody.innerHTML = rHtml;
+    }
+}
+
 
     // 5. Ranked Matches Table
     const tbody = document.getElementById('inspect-ranked-tbody');
@@ -1741,6 +1884,9 @@ window.openInspectCameraModal = openInspectCameraModal;
 window.closeInspectCameraModal = closeInspectCameraModal;
 window.captureInspectCameraFrame = captureInspectCameraFrame;
 window.runBiometricInspection = runBiometricInspection;
+window.switchInspectMode = switchInspectMode;
+window.selectMultiProbeFace = selectMultiProbeFace;
+
 
 
 
