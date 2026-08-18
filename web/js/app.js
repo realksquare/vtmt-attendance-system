@@ -1203,7 +1203,7 @@ function renderBiometricInspectionResults(data) {
                     <div style="font-size:10px; color:var(--text-muted);">Threshold: &ge; 50.0% (0.5000)</div>
                 </div>
                 <div class="stat-card" style="border-left:4px solid var(--amber);">
-                    <div class="stat-label">Angular Separation ($\theta$)</div>
+                    <div class="stat-label">Angular Separation (θ)</div>
                     <div class="stat-value" style="font-size:20px; color:var(--amber);">${target.angular_separation_deg}&deg;</div>
                     <div style="font-size:10px; color:var(--text-muted);">Active Face: #${activeIdx + 1} of ${data.total_faces_detected}</div>
                 </div>

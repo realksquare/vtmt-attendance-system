@@ -545,7 +545,7 @@
                                     <i class="fa-solid fa-barcode" style="color:var(--emerald);"></i> 512-D Embedding Vector Heatmap
                                 </div>
                                 <div style="font-size:11px; color:var(--text-muted); margin-bottom:6px;">
-                                    Visualizing the first 128 normalized float components ($\vec{v} \in [-1, +1]$):
+                                    Visualizing the first 128 normalized float components (v ∈ [-1.0, +1.0]):
                                 </div>
                                 <div id="inspect-vector-heatmap" style="display:flex; flex-wrap:wrap; gap:2px; padding:6px; background:rgba(0,0,0,0.3); border-radius:6px; border:1px solid var(--border); max-height:160px; overflow-y:auto;">
                                     <!-- Mini vector cells -->
@@ -851,6 +851,6 @@
             navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW failed:', err));
         }
     </script>
-    <script type="module" src="/web/js/app.js?v=17.0"></script>
+    <script type="module" src="/web/js/app.js?v=18.0"></script>
 </body>
 </html>
