@@ -1,9 +1,9 @@
 """
 Face Quality Analyzer Module.
-Implements a 3-Tier Quality Hierarchy for Classroom and Individual Face Analysis:
-- RECOGNITION_SAFE: Clear, sufficiently large face suitable for biometric recognition & PAD.
-- TRACKABLE_BUT_SMALL: Detectable face (e.g. back row student) suitable for tracking and evidence accumulation.
-- UNUSABLE: Insufficient information, severe blur, or out-of-bounds face.
+Implements a 3-Tier Quality Hierarchy calibrated for classroom environments:
+- RECOGNITION_SAFE: Clear, well-illuminated, sufficiently large face suitable for biometric recognition & PAD.
+- TRACKABLE_BUT_SMALL: Detectable face (e.g. back row student, suboptimal lighting, or slight movement) suitable for tracking and evidence accumulation.
+- UNUSABLE: Catastrophic image failure (near-black/blown out, extreme motion blur, or severe clipping).
 """
 
 from enum import Enum
@@ -36,6 +36,7 @@ class QualityResult:
     blur_score: float = 0.0
     area_ratio: float = 0.0
     brightness_mean: float = 0.0
+    quality_score: float = 0.0
     details: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -45,7 +46,7 @@ class FaceQualityAnalyzer:
     - Minimum face size ratio (safe vs trackable vs unusable)
     - Boundary margin completeness (not cut off at frame border)
     - Sharpness via Laplacian variance
-    - Lighting / exposure distribution
+    - Lighting / exposure distribution (soft-penalty for suboptimal light vs hard failure for catastrophic clipping)
     - Extreme head pose angles
     - Single-face constraint (optional for 1-on-1 enrollment, bypassed in classroom mode)
     """
@@ -56,15 +57,19 @@ class FaceQualityAnalyzer:
         min_trackable_area_ratio: float = QUALITY_TRACKABLE_MIN_AREA_RATIO,
         safe_blur_threshold: float = QUALITY_BLUR_THRESHOLD,
         trackable_blur_threshold: float = QUALITY_TRACKABLE_BLUR_THRESHOLD,
-        min_brightness: float = QUALITY_MIN_BRIGHTNESS,
-        max_brightness: float = QUALITY_MAX_BRIGHTNESS
+        min_safe_brightness: float = QUALITY_MIN_BRIGHTNESS,
+        max_safe_brightness: float = QUALITY_MAX_BRIGHTNESS,
+        catastrophic_min_brightness: float = 12.0,
+        catastrophic_max_brightness: float = 248.0
     ):
         self.min_safe_area_ratio = min_safe_area_ratio
         self.min_trackable_area_ratio = min_trackable_area_ratio
         self.safe_blur_threshold = safe_blur_threshold
         self.trackable_blur_threshold = trackable_blur_threshold
-        self.min_brightness = min_brightness
-        self.max_brightness = max_brightness
+        self.min_safe_brightness = min_safe_brightness
+        self.max_safe_brightness = max_safe_brightness
+        self.catastrophic_min_brightness = catastrophic_min_brightness
+        self.catastrophic_max_brightness = catastrophic_max_brightness
 
     def assess_face(
         self,
@@ -121,33 +126,41 @@ class FaceQualityAnalyzer:
         # Lighting / Exposure distribution
         brightness_mean = float(np.mean(gray_crop))
 
+        # Continuous lighting quality factor [0.0 to 1.0]
+        # Peak at ~128, soft roll-off towards dark and bright
+        lighting_factor = max(0.1, 1.0 - abs(brightness_mean - 128.0) / 128.0)
+        overall_quality_score = blur_score * area_ratio * lighting_factor
+
         details = {
             "bbox": [x1, y1, x2, y2],
             "area_ratio": area_ratio,
             "blur_score": blur_score,
             "brightness_mean": brightness_mean,
+            "lighting_factor": lighting_factor,
             "is_cut_off": is_cut_off
         }
 
-        # Check for extreme lighting / exposure
-        if brightness_mean < self.min_brightness:
+        # 1. Catastrophic Lighting Failure Check (near black or total whiteout)
+        if brightness_mean < self.catastrophic_min_brightness:
             return QualityResult(
                 passed=False,
-                reason="Lighting too dark. Face poorly illuminated.",
+                reason="Severe underexposure / near-black content",
                 tier=QualityTier.UNUSABLE,
                 blur_score=blur_score,
                 area_ratio=area_ratio,
                 brightness_mean=brightness_mean,
+                quality_score=overall_quality_score,
                 details=details
             )
-        elif brightness_mean > self.max_brightness:
+        elif brightness_mean > self.catastrophic_max_brightness:
             return QualityResult(
                 passed=False,
-                reason="Lighting over-exposed / severe glare.",
+                reason="Severe overexposure / complete whiteout",
                 tier=QualityTier.UNUSABLE,
                 blur_score=blur_score,
                 area_ratio=area_ratio,
                 brightness_mean=brightness_mean,
+                quality_score=overall_quality_score,
                 details=details
             )
 
@@ -166,13 +179,13 @@ class FaceQualityAnalyzer:
                 extreme_pose = True
 
         # Classify into 3 Tiers:
-        # 1. UNUSABLE
+        # Tier 1: UNUSABLE (Severe blur, sub-trackable area, or extreme pose)
         if (
             area_ratio < self.min_trackable_area_ratio
             or blur_score < self.trackable_blur_threshold
             or extreme_pose
         ):
-            reason_msg = "Face too blurry or tiny" if blur_score < self.trackable_blur_threshold else "Face too small / unusable"
+            reason_msg = "Severe motion blur" if blur_score < self.trackable_blur_threshold else "Face too small / unusable"
             if extreme_pose:
                 reason_msg = "Extreme head pose angle"
             return QualityResult(
@@ -182,26 +195,45 @@ class FaceQualityAnalyzer:
                 blur_score=blur_score,
                 area_ratio=area_ratio,
                 brightness_mean=brightness_mean,
+                quality_score=overall_quality_score,
                 details=details
             )
 
-        # 2. TRACKABLE_BUT_SMALL (e.g. Back/Middle row in classroom)
+        # Tier 2: TRACKABLE_BUT_SMALL / SUBOPTIMAL LIGHTING
+        # Handles:
+        # a) Back/Middle row small faces (area_ratio between trackable and safe)
+        # b) Mild motion blur (blur_score between trackable and safe)
+        # c) Suboptimal classroom lighting (brightness in [12..35) or (225..248])
+        is_suboptimal_lighting = (
+            brightness_mean < self.min_safe_brightness or
+            brightness_mean > self.max_safe_brightness
+        )
+
         if (
             area_ratio < self.min_safe_area_ratio
             or blur_score < self.safe_blur_threshold
+            or is_suboptimal_lighting
             or is_cut_off
         ):
+            reason_parts = []
+            if area_ratio < self.min_safe_area_ratio: reason_parts.append("small face")
+            if blur_score < self.safe_blur_threshold: reason_parts.append("slight blur")
+            if is_suboptimal_lighting: reason_parts.append("suboptimal lighting")
+            if is_cut_off: reason_parts.append("edge border")
+            reason_msg = "Trackable face (" + ", ".join(reason_parts) + ")"
+
             return QualityResult(
                 passed=True,
-                reason="Trackable small/distant face",
+                reason=reason_msg,
                 tier=QualityTier.TRACKABLE_BUT_SMALL,
                 blur_score=blur_score,
                 area_ratio=area_ratio,
                 brightness_mean=brightness_mean,
+                quality_score=overall_quality_score,
                 details=details
             )
 
-        # 3. RECOGNITION_SAFE
+        # Tier 3: RECOGNITION_SAFE
         return QualityResult(
             passed=True,
             reason="Face Quality Safe for Biometric Recognition",
@@ -209,6 +241,7 @@ class FaceQualityAnalyzer:
             blur_score=blur_score,
             area_ratio=area_ratio,
             brightness_mean=brightness_mean,
+            quality_score=overall_quality_score,
             details=details
         )
 

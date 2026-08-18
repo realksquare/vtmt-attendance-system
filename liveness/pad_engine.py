@@ -1,17 +1,24 @@
 """
-Passive Presentation Attack Detection (PAD) Engine.
-Integrates local MiniFASNet ONNX model inference and multi-frame sample aggregation.
+Anti-Spoofing and Presentation Attack Detection (PAD) Engine.
+Integrates local ONNX MiniFASNet V2 and V1SE models for passive anti-spoofing.
+Features:
+- NCHW float32 BGR preprocessing with expanded 2.7x/4.0x bbox scale
+- Multi-sample sliding window aggregator (MultiFramePADAggregator)
+- Fail-Closed Security: Model errors or unavailable models NEVER authorize attendance (score = 0.0, passed = False)
 """
 
 import os
-from typing import List, Tuple, Optional, Dict, Any
-from dataclasses import dataclass, field
-import numpy as np
 import cv2
+import numpy as np
 import onnxruntime as ort
+from typing import Tuple, List, Optional, Dict, Any
+from dataclasses import dataclass, field
 
 from config import (
-    PAD_MODEL_V2_PATH, PAD_MODEL_V1SE_PATH, PAD_SCORE_THRESHOLD, PAD_MIN_VALID_SAMPLES
+    PAD_MODEL_V2_PATH,
+    PAD_MODEL_V1SE_PATH,
+    PAD_SCORE_THRESHOLD,
+    PAD_MIN_VALID_SAMPLES
 )
 
 
@@ -25,81 +32,92 @@ class PADResult:
 
 class AntiSpoofEngine:
     """
-    Local ONNX-based Passive Presentation Attack Detection Engine.
-    Executes MiniFASNet V2 / V1SE inference on expanded face crops.
+    Local ONNX MiniFASNet Passive Presentation Attack Detection (PAD) Engine.
+    Evaluates 2D face presentation attacks (phone screens, tablets, printed photos, cutouts).
     """
 
-    def __init__(self, model_path: str = PAD_MODEL_V2_PATH, threshold: float = PAD_SCORE_THRESHOLD):
-        self.threshold = threshold
+    def __init__(
+        self,
+        model_path: str = PAD_MODEL_V2_PATH,
+        threshold: float = PAD_SCORE_THRESHOLD,
+        scale: float = 2.7,
+        input_size: Tuple[int, int] = (80, 80)
+    ):
         self.model_path = model_path
+        self.threshold = threshold
+        self.scale = scale
+        self.input_size = input_size
         self.session: Optional[ort.InferenceSession] = None
-        self.input_name: str = "input"
-        self.input_shape: Tuple[int, int] = (80, 80)
-        self.crop_scale: float = 2.7
-
+        self.input_name: Optional[str] = None
         self._load_model()
 
     def _load_model(self):
-        """Initialize local ONNX Runtime inference session on CPU."""
+        """Initializes the ONNX runtime inference session with CPU provider."""
         if not os.path.exists(self.model_path):
-            # Fallback to secondary model if primary path not found
+            print(f"[AntiSpoofEngine] Model not found at: {self.model_path}")
+            # Fallback to secondary MiniFASNet V1SE if available
             if os.path.exists(PAD_MODEL_V1SE_PATH):
                 self.model_path = PAD_MODEL_V1SE_PATH
-                self.crop_scale = 4.0
+                self.scale = 4.0
+            else:
+                self.session = None
+                return
 
-        if os.path.exists(self.model_path):
+        try:
             opts = ort.SessionOptions()
             opts.intra_op_num_threads = 2
-            opts.inter_op_num_threads = 1
             opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-            self.session = ort.InferenceSession(self.model_path, opts, providers=["CPUExecutionProvider"])
-            inputs = self.session.get_inputs()
-            if inputs:
-                self.input_name = inputs[0].name
-                # Shape format: [batch, channels, height, width]
-                if len(inputs[0].shape) == 4 and isinstance(inputs[0].shape[2], int):
-                    self.input_shape = (inputs[0].shape[2], inputs[0].shape[3])
+            self.session = ort.InferenceSession(self.model_path, opts, providers=['CPUExecutionProvider'])
+            self.input_name = self.session.get_inputs()[0].name
+            print(f"[AntiSpoofEngine] MiniFASNet ONNX loaded: {os.path.basename(self.model_path)}")
+        except Exception as e:
+            print(f"[AntiSpoofEngine] Failed to load ONNX session: {e}")
+            self.session = None
 
     def preprocess_crop(self, full_frame: np.ndarray, bbox: np.ndarray) -> np.ndarray:
         """
-        Extracts scaled bounding box crop clamped to frame boundary and formats to NCHW float32.
+        Scales face bounding box by expansion factor (e.g. 2.7x) clamped to frame boundary,
+        resizes to (80, 80), converts to NCHW float32 BGR format.
         """
         fh, fw, _ = full_frame.shape
         x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
-        bw = x2 - x1
-        bh = y2 - y1
-        cx = (x1 + x2) / 2.0
-        cy = (y1 + y2) / 2.0
+        bw, bh = x2 - x1, y2 - y1
+        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
 
-        # Expanded crop based on model scale factor (e.g. 2.7x)
-        crop_w = bw * self.crop_scale
-        crop_h = bh * self.crop_scale
+        # Expanded crop dimension
+        max_side = max(bw, bh)
+        new_side = int(max_side * self.scale)
 
-        nx1 = max(0, int(cx - crop_w / 2.0))
-        ny1 = max(0, int(cy - crop_h / 2.0))
-        nx2 = min(fw, int(cx + crop_w / 2.0))
-        ny2 = min(fh, int(cy + crop_h / 2.0))
+        nx1 = max(0, cx - new_side // 2)
+        ny1 = max(0, cy - new_side // 2)
+        nx2 = min(fw, cx + new_side // 2)
+        ny2 = min(fh, cy + new_side // 2)
 
-        if nx2 <= nx1 or ny2 <= ny1:
-            crop = cv2.resize(full_frame[max(0, y1):min(fh, y2), max(0, x1):min(fw, x2)], self.input_shape)
+        cropped = full_frame[ny1:ny2, nx1:nx2]
+        if cropped.size == 0:
+            cropped = np.zeros((self.input_size[1], self.input_size[0], 3), dtype=np.uint8)
         else:
-            crop = full_frame[ny1:ny2, nx1:nx2]
-            crop = cv2.resize(crop, self.input_shape)
+            cropped = cv2.resize(cropped, self.input_size, interpolation=cv2.INTER_AREA)
 
-        # Transpose HWC (BGR) to CHW and add batch dim
-        blob = crop.astype(np.float32)
+        # MiniFASNet expects [1, 3, H, W] float32 in [0, 255] or standard BGR
+        blob = cropped.astype(np.float32)
         blob = np.transpose(blob, (2, 0, 1))
         blob = np.expand_dims(blob, axis=0)
         return blob
 
     def predict_single(self, full_frame: np.ndarray, bbox: np.ndarray) -> Tuple[float, Dict[str, Any]]:
         """
-        Runs MiniFASNet inference on face crop.
-        Returns genuine live score probability in [0.0, 1.0].
+        Executes ONNX inference on cropped face region.
+        Returns (genuine_probability: float, details: dict).
+        Enforces Fail-Closed security: if model is missing or fails, returns (0.0, {...})
         """
         if self.session is None:
-            # If model file is unavailable, run local spectral analyzer
-            return self._spectral_fallback(full_frame, bbox)
+            # Model is unavailable -> Fail Closed
+            return 0.0, {
+                "status": "MODEL_UNAVAILABLE",
+                "error": "MiniFASNet ONNX model is missing or could not be loaded",
+                "fallback": False
+            }
 
         try:
             blob = self.preprocess_crop(full_frame, bbox)
@@ -111,6 +129,7 @@ class AntiSpoofEngine:
             live_prob = float(probs[0][1])
 
             details = {
+                "status": "OK",
                 "model": os.path.basename(self.model_path),
                 "live_score": live_prob,
                 "probabilities": probs[0].tolist(),
@@ -118,63 +137,42 @@ class AntiSpoofEngine:
             return live_prob, details
         except Exception as err:
             print(f"[AntiSpoofEngine] Model inference error: {err}")
-            return self._spectral_fallback(full_frame, bbox)
-
-    def _spectral_fallback(self, full_frame: np.ndarray, bbox: np.ndarray) -> Tuple[float, Dict[str, Any]]:
-        """
-        Deterministic spectral texture fallback analyzing Moiré frequency,
-        dermal chroma, and glass reflections when deep model is unavailable.
-        """
-        fh, fw, _ = full_frame.shape
-        x1, y1, x2, y2 = max(0, int(bbox[0])), max(0, int(bbox[1])), min(fw, int(bbox[2])), min(fh, int(bbox[3]))
-        face_crop = full_frame[y1:y2, x1:x2]
-
-        if face_crop.size == 0:
-            return 0.0, {"reason": "Empty crop"}
-
-        h, w, _ = face_crop.shape
-        gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
-
-        # 2D FFT Moiré high frequency ratio
-        f = np.fft.fft2(gray)
-        fshift = np.fft.fftshift(f)
-        mag = 20 * np.log(np.abs(fshift) + 1e-5)
-        cy, cx = h // 2, w // 2
-        r_low = max(5, min(h, w) // 8)
-        low_energy = mag[max(0, cy - r_low):min(h, cy + r_low), max(0, cx - r_low):min(w, cx + r_low)].mean()
-        high_freq_ratio = float(mag.mean() / (low_energy + 1e-5))
-
-        # YCrCb dermal skin chroma
-        ycrcb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2YCrCb)
-        cr, cb = ycrcb[:, :, 1], ycrcb[:, :, 2]
-        skin_ratio = float(np.count_nonzero((cr >= 128) & (cr <= 175) & (cb >= 75) & (cb <= 132))) / float(h * w)
-
-        # Specular screen glare
-        hsv = cv2.cvtColor(face_crop, cv2.COLOR_BGR2HSV)
-        glare_ratio = float(np.count_nonzero((hsv[:, :, 2] > 240) & (hsv[:, :, 1] < 30))) / float(h * w)
-
-        is_spoof = (high_freq_ratio > 0.76) or (glare_ratio > 0.06) or (skin_ratio < 0.20)
-        score = 0.20 if is_spoof else 0.85
-
-        return score, {
-            "fallback": True,
-            "high_freq_ratio": high_freq_ratio,
-            "skin_ratio": skin_ratio,
-            "glare_ratio": glare_ratio
-        }
+            # Exception in deep model -> Fail Closed
+            return 0.0, {
+                "status": "PAD_ERROR",
+                "error": str(err),
+                "fallback": False
+            }
 
     def verify(self, full_frame: np.ndarray, bbox: np.ndarray) -> PADResult:
         """Single-frame passive PAD verification."""
         score, details = self.predict_single(full_frame, bbox)
+        status = details.get("status", "OK")
+
+        if status == "MODEL_UNAVAILABLE":
+            return PADResult(
+                passed=False,
+                score=0.0,
+                reason="PAD Model Unavailable (Fail Closed)",
+                details=details
+            )
+        elif status == "PAD_ERROR":
+            return PADResult(
+                passed=False,
+                score=0.0,
+                reason="PAD Inference Error (Fail Closed)",
+                details=details
+            )
+
         passed = score >= self.threshold
-        reason = "Genuine Live Face" if passed else "Presentation Attack / Spoof Detected"
+        reason = "Genuine Live Face" if passed else f"Presentation Attack / Spoof Detected (PAD: {score:.2f} < {self.threshold:.2f})"
         return PADResult(passed=passed, score=score, reason=reason, details=details)
 
 
 class MultiFramePADAggregator:
     """
-    Aggregates passive PAD scores over multiple temporal samples
-    to prevent single-frame false acceptances or rejections.
+    Aggregates passive PAD scores over multiple temporal observations
+    to enforce multi-frame statistical consistency and prevent single-frame false acceptance.
     """
 
     def __init__(self, min_samples: int = PAD_MIN_VALID_SAMPLES, threshold: float = PAD_SCORE_THRESHOLD):
@@ -199,33 +197,53 @@ class MultiFramePADAggregator:
         Computes robust aggregate statistics (median, min, max, std)
         and evaluates final multi-frame PAD decision.
         """
-        count = len(self.samples)
-        if count < self.min_samples:
+        if len(self.samples) == 0:
             return PADResult(
                 passed=False,
-                score=float(np.median(self.samples)) if count > 0 else 0.0,
-                reason=f"Insufficient PAD Samples ({count}/{self.min_samples})",
-                details={"sample_count": count, "samples": list(self.samples)}
+                score=0.0,
+                reason="No PAD samples collected",
+                details={"sample_count": 0}
             )
 
+        if len(self.samples) < self.min_samples:
+            median_score = float(np.median(self.samples))
+            return PADResult(
+                passed=False,
+                score=median_score,
+                reason=f"Insufficient temporal PAD samples ({len(self.samples)} < {self.min_samples} required)",
+                details={"sample_count": len(self.samples), "min_required": self.min_samples}
+            )
+
+        # Calculate statistics
         median_score = float(np.median(self.samples))
+        mean_score = float(np.mean(self.samples))
         min_score = float(np.min(self.samples))
         max_score = float(np.max(self.samples))
-        std_score = float(np.std(self.samples))
+        std_dev = float(np.std(self.samples))
 
-        passed = median_score >= self.threshold
-        reason = "Multi-Frame PAD Passed" if passed else f"Multi-Frame PAD Failed (Median: {median_score:.2f} < {self.threshold:.2f})"
+        # Fail closed if any sample encountered a model error
+        has_error = any(d.get("status") in ("MODEL_UNAVAILABLE", "PAD_ERROR") for d in self.sample_details)
+        if has_error:
+            return PADResult(
+                passed=False,
+                score=0.0,
+                reason="PAD model error encountered in temporal sequence (Fail Closed)",
+                details={"sample_count": len(self.samples), "has_error": True}
+            )
+
+        passed = (median_score >= self.threshold) and (min_score >= (self.threshold - 0.20))
+        reason = "Multi-Frame Live Verification Passed" if passed else f"Multi-Frame Spoof Rejected (Median: {median_score:.2f} < {self.threshold:.2f})"
 
         return PADResult(
             passed=passed,
             score=median_score,
             reason=reason,
             details={
-                "sample_count": count,
+                "sample_count": len(self.samples),
                 "median_score": median_score,
+                "mean_score": mean_score,
                 "min_score": min_score,
                 "max_score": max_score,
-                "std_score": std_score,
-                "samples": list(self.samples)
+                "std_dev": std_dev
             }
         )

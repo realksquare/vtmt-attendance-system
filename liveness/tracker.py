@@ -2,7 +2,8 @@
 Classroom Multi-Face Tracker and Burst Decision Aggregator Module.
 Implements track-level temporal evidence accumulation across the burst window:
 - Spatial-temporal face tracking across sample frames (Centroid + IoU association)
-- Multi-observation evidence collection per tracked student (embeddings, PAD scores, quality tiers)
+- Bounded best-observation buffer per track (ranked by quality score)
+- Authoritative MultiFramePADAggregator integration per track
 - Window-level candidate identity voting & final aggregated decision engine
 - Single attendance decision committed exactly ONCE per window.
 """
@@ -16,12 +17,15 @@ import numpy as np
 from config import (
     MATCH_THRESHOLD,
     PAD_SCORE_THRESHOLD,
+    PAD_MIN_VALID_SAMPLES,
     BURST_MIN_VALID_OBSERVATIONS,
     BURST_IDENTITY_SUPPORT_RATIO,
     BURST_TRACK_MAX_ABSENT_FRAMES
 )
 from .quality import QualityTier, QualityResult
-from .pad_engine import PADResult
+from .pad_engine import PADResult, MultiFramePADAggregator
+
+MAX_TRACK_OBSERVATIONS = 30  # Bound memory retention per track across burst
 
 
 @dataclass
@@ -47,19 +51,32 @@ class TrackEvidence:
     last_bbox: np.ndarray
     absent_frames: int = 0
     observations: List[FaceObservation] = field(default_factory=list)
+    pad_aggregator: MultiFramePADAggregator = field(default_factory=lambda: MultiFramePADAggregator(min_samples=PAD_MIN_VALID_SAMPLES, threshold=PAD_SCORE_THRESHOLD))
     best_crop: Optional[np.ndarray] = None
     best_sharpness: float = 0.0
 
     def add_observation(self, obs: FaceObservation):
-        self.observations.append(obs)
         self.last_seen = obs.timestamp
         self.last_bbox = obs.bbox
         self.absent_frames = 0
+
+        # Feed PAD score into authoritative MultiFramePADAggregator if available
+        if obs.pad_res is not None:
+            self.pad_aggregator.add_sample(obs.pad_res.score, obs.pad_res.details)
 
         # Retain cleanest crop for archiving if needed
         if obs.quality_res.blur_score > self.best_sharpness and obs.crop_image is not None:
             self.best_sharpness = obs.quality_res.blur_score
             self.best_crop = obs.crop_image
+
+        # Add observation with bounded memory management
+        self.observations.append(obs)
+        if len(self.observations) > MAX_TRACK_OBSERVATIONS:
+            # Sort by quality_score, keep top observations + newest observation
+            newest = self.observations[-1]
+            prior = self.observations[:-1]
+            prior.sort(key=lambda o: o.quality_res.quality_score, reverse=True)
+            self.observations = prior[:MAX_TRACK_OBSERVATIONS - 1] + [newest]
 
 
 @dataclass
@@ -76,6 +93,7 @@ class TrackDecision:
     total_observations_count: int = 0
     pad_score: float = 0.0
     pad_passed: bool = False
+    pad_details: Dict[str, Any] = field(default_factory=dict)
     best_crop: Optional[np.ndarray] = None
     reason: str = ""
 
@@ -86,7 +104,7 @@ class ClassroomFaceTracker:
     Maintains continuous track identities across sample frames.
     """
 
-    def __init__(self, iou_threshold: float = 0.30, max_centroid_dist: float = 120.0):
+    def __init__(self, iou_threshold: float = 0.25, max_centroid_dist: float = 120.0):
         self.iou_threshold = iou_threshold
         self.max_centroid_dist = max_centroid_dist
         self.next_track_id = 1
@@ -117,7 +135,6 @@ class ClassroomFaceTracker:
         Associates current frame face detections with existing tracks or creates new ones.
         Returns list of (track_id, observation).
         """
-        now = time.time()
         matched_results = []
         unmatched_observations = list(range(len(current_observations)))
         active_ids = list(self.active_tracks.keys())
@@ -132,7 +149,6 @@ class ClassroomFaceTracker:
                     iou = self._compute_iou(track.last_bbox, obs.bbox)
                     dist = self._compute_centroid_dist(track.last_bbox, obs.bbox)
                     if iou >= self.iou_threshold or dist <= self.max_centroid_dist:
-                        # Prioritize higher IoU and closer centroid distance
                         score = iou * 100.0 - dist
                         matches.append((score, track_id, o_idx))
 
@@ -207,25 +223,21 @@ class BurstDecisionAggregator:
 
         # Filter observations by quality
         safe_obs = [o for o in track.observations if o.quality_res.tier == QualityTier.RECOGNITION_SAFE and o.embedding is not None]
-        trackable_obs = [o for o in track.observations if o.quality_res.tier == QualityTier.TRACKABLE_BUT_SMALL]
 
-        # 1. Check if track was only small/distant throughout with no safe recognition frames
+        # 1. Check if track had zero safe recognition frames throughout burst
         if len(safe_obs) == 0:
             return TrackDecision(
                 track_id=track.track_id,
                 status="UNRESOLVED",
                 total_observations_count=total_obs,
                 best_crop=track.best_crop,
-                reason="Face observed but too small/distant throughout burst for safe biometric identification"
+                reason="Face observed but too small/suboptimal throughout burst for safe biometric identification"
             )
 
-        # 2. Multi-frame PAD Aggregation
-        pad_scores = [o.pad_res.score for o in safe_obs if o.pad_res is not None]
-        if not pad_scores:
-            pad_scores = [o.pad_res.score for o in track.observations if o.pad_res is not None]
-
-        median_pad = float(np.median(pad_scores)) if pad_scores else 0.0
-        pad_passed = (median_pad >= pad_thresh) and (len(pad_scores) >= 1)
+        # 2. Authoritative MultiFramePADAggregator Evaluation
+        pad_agg_res = track.pad_aggregator.evaluate()
+        median_pad = pad_agg_res.score
+        pad_passed = pad_agg_res.passed
 
         if not pad_passed:
             return TrackDecision(
@@ -233,10 +245,11 @@ class BurstDecisionAggregator:
                 status="UNRESOLVED",
                 pad_score=median_pad,
                 pad_passed=False,
+                pad_details=pad_agg_res.details,
                 valid_observations_count=len(safe_obs),
                 total_observations_count=total_obs,
                 best_crop=track.best_crop,
-                reason=f"Multi-frame Anti-Spoofing Check Failed (Median PAD: {median_pad:.2f} < {pad_thresh:.2f})"
+                reason=f"Multi-Frame Anti-Spoofing Check Failed: {pad_agg_res.reason}"
             )
 
         # 3. Candidate Identity Voting
@@ -257,6 +270,7 @@ class BurstDecisionAggregator:
                 top_similarity=top_score,
                 pad_score=median_pad,
                 pad_passed=True,
+                pad_details=pad_agg_res.details,
                 valid_observations_count=len(safe_obs),
                 total_observations_count=total_obs,
                 best_crop=track.best_crop,
@@ -284,6 +298,7 @@ class BurstDecisionAggregator:
                 support_ratio=support_ratio,
                 pad_score=median_pad,
                 pad_passed=True,
+                pad_details=pad_agg_res.details,
                 valid_observations_count=len(top_candidate_obs),
                 total_observations_count=total_obs,
                 best_crop=track.best_crop,
@@ -301,6 +316,7 @@ class BurstDecisionAggregator:
                 support_ratio=support_ratio,
                 pad_score=median_pad,
                 pad_passed=True,
+                pad_details=pad_agg_res.details,
                 valid_observations_count=len(top_candidate_obs),
                 total_observations_count=total_obs,
                 best_crop=track.best_crop,
@@ -318,6 +334,7 @@ class BurstDecisionAggregator:
                 support_ratio=support_ratio,
                 pad_score=median_pad,
                 pad_passed=True,
+                pad_details=pad_agg_res.details,
                 valid_observations_count=len(top_candidate_obs),
                 total_observations_count=total_obs,
                 best_crop=track.best_crop,
@@ -337,6 +354,7 @@ class BurstDecisionAggregator:
             total_observations_count=total_obs,
             pad_score=median_pad,
             pad_passed=True,
+            pad_details=pad_agg_res.details,
             best_crop=track.best_crop,
             reason=f"Verified PRESENT with {len(top_candidate_obs)} consistent observations (Median: {median_sim:.2f}, PAD: {median_pad:.2f})"
         )
@@ -359,7 +377,6 @@ class BurstDecisionAggregator:
         for track in all_tracks:
             decision = cls.aggregate_track(track)
             if decision.status == "PRESENT" and decision.identity:
-                # If same student was tracked under multiple tracks, take highest median confidence
                 if decision.identity not in student_results or decision.median_similarity > student_results[decision.identity].median_similarity:
                     student_results[decision.identity] = decision
             elif decision.status == "UNKNOWN":
@@ -382,7 +399,6 @@ class BurstDecisionAggregator:
                     "reason": dec.reason
                 })
             else:
-                # Check if any unresolved track belonged to this student
                 matching_unresolved = [u for u in unresolved_tracks if u.identity == sid]
                 if matching_unresolved:
                     u_dec = matching_unresolved[0]
