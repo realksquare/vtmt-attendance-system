@@ -1,0 +1,811 @@
+# GEMINI_FINAL_ATTENDANCE_PIPELINE_FIX.md
+
+Read this entire file before changing the repository.
+
+This is a focused engineering pass for the Smart Attendance System. Do not rewrite the project from scratch.
+
+The project is intended to become an offline classroom attendance appliance using a Jetson-class compute device and a USB-UVC camera module. The camera will be mounted at the front of classrooms and the system must work across different classroom sizes and layouts.
+
+The immediate goal is to make the existing face-recognition, burst, liveness, anti-spoofing, and attendance pipeline technically coherent and safe before hardware integration.
+
+## 1. Inspect the real repository first
+
+Inspect the actual current files before editing.
+
+At minimum inspect:
+
+- `burst_engine.py`
+- `recognition.py`
+- `attendance.py`
+- `config.py`
+- `scheduler.py`
+- `liveness/quality.py`
+- `liveness/tracker.py`
+- `liveness/pad_engine.py`
+- `liveness/challenge.py`
+- `liveness/verification.py`
+- `test_system.py`
+- relevant frontend files
+- model-loading code
+- database code
+
+Do not assume previous implementation reports are accurate.
+
+Trace the real runtime path:
+
+```text
+camera
+  -> frame acquisition
+  -> face detection
+  -> quality
+  -> PAD
+  -> recognition
+  -> tracking / aggregation
+  -> window result
+  -> multi-window voting
+  -> attendance commit
+```
+
+Before editing, identify:
+
+1. Whether burst-level aggregation is actually present.
+2. Whether attendance can still be committed from a single frame.
+3. Whether Window A, B and C actually exist in the live scheduler.
+4. Whether a 2-out-of-3 decision happens at window level.
+5. Whether `TRACKABLE_BUT_SMALL` faces can eventually contribute recognition evidence.
+6. Whether multi-frame PAD is actually used by the production path.
+7. Whether PAD/model failures fail closed.
+8. Whether brightness/quality gates are too aggressive.
+9. Whether the camera preview is decoupled from expensive inference.
+10. Whether heavy models are initialized once or repeatedly.
+
+If the public repository differs from the intended local state, inspect the actual local state and preserve any correct local work.
+
+Do not undo working changes simply because an older file/document says otherwise.
+
+---
+
+# 2. Primary architecture requirement
+
+The final attendance pipeline must follow this hierarchy:
+
+```text
+Camera frames
+     |
+     v
+Frame sampling
+     |
+     v
+Face observations
+     |
+     +---- quality
+     +---- PAD
+     +---- recognition evidence
+     |
+     v
+Temporary face tracks
+     |
+     v
+Track-level aggregation
+     |
+     v
+One result per student per window
+     |
+     v
+Window A / Window B / Window C
+     |
+     v
+2-out-of-3 voting
+     |
+     v
+Final attendance state
+```
+
+The system must NOT do:
+
+```text
+single frame
+   -> recognized
+   -> attendance immediately
+```
+
+Attendance must only be committed after the required temporal/window-level decision.
+
+---
+
+# 3. Triple-window requirement
+
+The intended architecture is:
+
+```text
+Window A = first 5 minutes
+Window B = middle 5 minutes
+Window C = final 5 minutes
+```
+
+For a one-hour lecture:
+
+```text
+09:00 - 09:05  -> Window A
+09:27 - 09:32  -> Window B
+09:55 - 10:00  -> Window C
+```
+
+Verify the actual scheduler.
+
+If the live implementation still only has Window A and Window B, implement Window C consistently rather than merely changing documentation.
+
+Each window must produce one student-level result.
+
+The voting unit is the completed window, not an individual frame.
+
+Example:
+
+```text
+Student 17
+
+A -> PRESENT
+B -> UNRESOLVED
+C -> PRESENT
+
+Final -> PRESENT
+```
+
+Do not allow one frame from Window A to override the complete results of B and C.
+
+---
+
+# 4. No single-frame attendance
+
+Inspect the exact attendance commit path.
+
+The desired flow is:
+
+```text
+sample observations
+     |
+     v
+collect evidence
+     |
+     v
+aggregate identity
+     |
+     v
+aggregate PAD/liveness
+     |
+     v
+apply security gates
+     |
+     v
+produce one window result
+     |
+     v
+record attendance once
+```
+
+If `record_window_attendance()` or an equivalent function is called inside the per-frame loop, fix it.
+
+Attendance persistence must be idempotent for:
+
+```text
+student + slot + window
+```
+
+Repeated observations of the same student must not create repeated attendance records.
+
+---
+
+# 5. Classroom face tracking
+
+The camera will be mounted at the front of the classroom.
+
+Students in the back rows can occupy fewer pixels than students in the front.
+
+Do not treat:
+
+```text
+small face in one frame
+```
+
+as:
+
+```text
+absent
+```
+
+Use three conceptual quality levels:
+
+```text
+RECOGNITION_SAFE
+TRACKABLE_BUT_SMALL
+UNUSABLE
+```
+
+## RECOGNITION_SAFE
+
+The face has enough usable detail for normal recognition/PAD processing.
+
+## TRACKABLE_BUT_SMALL
+
+The face can be detected and tracked, but recognition from that observation is not reliable enough.
+
+Keep the track.
+
+Store bounded evidence.
+
+Wait for later observations.
+
+Example:
+
+```text
+Frame 1 -> small
+Frame 2 -> small
+Frame 3 -> recognition-safe
+Frame 4 -> blurry
+Frame 5 -> recognition-safe
+```
+
+Recognition should use Frames 3 and 5.
+
+## UNUSABLE
+
+The observation is not reliable enough for tracking or biometric processing.
+
+Do not force an identity.
+
+Do not mark the person absent merely because of this frame.
+
+---
+
+# 6. Best-observation strategy
+
+For each temporary track, retain only a bounded number of useful observations.
+
+Rank observations using available information such as:
+
+- face size
+- sharpness
+- exposure
+- pose
+- crop completeness
+- PAD validity
+
+Do not retain unlimited raw frames.
+
+Temporary in-memory crops are acceptable for inference.
+
+Do not permanently store classroom video.
+
+The track should effectively behave like:
+
+```text
+Track 01
+
+observation 1 -> small -> retain as track evidence
+observation 2 -> blurry -> low quality
+observation 3 -> safe -> recognition
+observation 4 -> safe -> recognition
+observation 5 -> small -> retain tracking evidence
+
+final -> aggregate recognition + PAD + quality
+```
+
+---
+
+# 7. Recognition aggregation
+
+Do not literally average face embeddings.
+
+For every recognition-eligible observation:
+
+```text
+probe embedding
+   ->
+compare with enrolled templates
+   ->
+candidate identity + similarity
+```
+
+Then aggregate observations by candidate identity.
+
+Use robust evidence such as:
+
+- observation count
+- identity support count
+- support ratio
+- median similarity
+- top-k similarity
+- consistency across observations
+
+Do not allow one unusually high score to dominate a track when the rest of the evidence disagrees.
+
+Example:
+
+```text
+Student A:
+0.72
+0.78
+0.80
+0.76
+
+Student B:
+0.52
+
+Final -> Student A
+```
+
+The exact thresholds must be calibrated from actual data.
+
+Do not lower thresholds merely to make back-row faces pass.
+
+---
+
+# 8. PAD must be genuinely multi-frame
+
+Inspect `liveness/pad_engine.py`.
+
+If `MultiFramePADAggregator` exists but the production burst path does not use it, resolve the duplication.
+
+There must be one authoritative aggregation path.
+
+The final window PAD decision should not be based on only one successful PAD observation when the configuration requires multiple samples.
+
+Use the existing configuration:
+
+```text
+PAD_MIN_VALID_SAMPLES
+```
+
+or a justified equivalent.
+
+The production behavior should be conceptually:
+
+```text
+PAD observation 1
+PAD observation 2
+PAD observation 3
+PAD observation 4
+PAD observation 5
+        |
+        v
+multi-frame PAD aggregation
+        |
+        v
+PAD decision
+```
+
+A single good PAD score must not automatically make the entire burst live.
+
+Do not invent a second competing PAD aggregator.
+
+---
+
+# 9. PAD must fail closed
+
+This is security-critical.
+
+If:
+
+- MiniFASNet model is unavailable
+- ONNX model cannot load
+- inference throws
+- model output is invalid
+- preprocessing fails
+- required PAD component is unavailable
+
+then the result must NOT become a successful live result.
+
+Use explicit states such as:
+
+```text
+GENUINE
+SPOOF
+PAD_LOW_CONFIDENCE
+PAD_ERROR
+MODEL_UNAVAILABLE
+```
+
+Security rule:
+
+```text
+PAD_ERROR / MODEL_UNAVAILABLE
+    ->
+NO ATTENDANCE
+```
+
+Do not silently replace MiniFASNet with a heuristic score that looks equivalent to the trained PAD model.
+
+If a heuristic fallback is retained for diagnostics, clearly classify it as diagnostic only and ensure it cannot authorize automated attendance.
+
+---
+
+# 10. Quality and lighting
+
+Inspect `liveness/quality.py`.
+
+Do not remove quality checks.
+
+However, mild lighting variation should generally lower observation quality rather than instantly eliminate a usable face.
+
+Classrooms can contain:
+
+- windows
+- shadows
+- fluorescent lights
+- projectors
+- mixed lighting
+- backlighting
+
+Use hard rejection only for genuinely unusable conditions.
+
+For example:
+
+```text
+mildly dark
+    ->
+lower quality
+    ->
+keep track
+```
+
+rather than:
+
+```text
+mildly dark
+    ->
+UNUSABLE
+    ->
+student treated as absent
+```
+
+Severe clipping, near-black images, extreme blur, incomplete crops, or similar failures may remain hard failures.
+
+---
+
+# 11. Camera pipeline and lag
+
+The camera preview must remain responsive.
+
+Preferred architecture:
+
+```text
+Camera acquisition
+       |
+       +-----------------> preview
+       |
+       v
+latest-frame buffer
+       |
+       v
+controlled inference sampling
+       |
+       +----> detection
+       +----> PAD
+       +----> recognition
+       +----> tracking
+```
+
+Avoid unbounded queues.
+
+Prefer the newest useful frame.
+
+Do not initialize InsightFace/PAD models inside the frame loop.
+
+Do not run database writes on every frame.
+
+Do not introduce excessive threading if the existing architecture can solve the issue with a simple latest-frame design.
+
+Measure performance if practical.
+
+---
+
+# 12. Camera resolution must remain configurable
+
+The current configuration may use 640x480.
+
+Do not assume this is the final deployment resolution.
+
+The final hardware is expected to use a high-quality USB-UVC camera module, potentially 4K.
+
+Do not simply feed every 4K frame into every model.
+
+Prefer:
+
+```text
+high-resolution camera
+      |
+      v
+capture / preview
+      |
+      v
+efficient detection resolution
+      |
+      v
+high-quality face crop
+      |
+      +---- recognition
+      +---- PAD
+```
+
+Preserve source detail where it matters.
+
+Keep camera resolution configurable.
+
+---
+
+# 13. Three-window result states
+
+At window level, support:
+
+```text
+PRESENT
+UNRESOLVED
+```
+
+and preserve the existing project policy for `ABSENT` if applicable.
+
+Do not confuse:
+
+```text
+not enough biometric evidence
+```
+
+with:
+
+```text
+student definitely absent
+```
+
+Examples of unresolved:
+
+- face too small throughout burst
+- heavy occlusion
+- insufficient recognition observations
+- conflicting identity evidence
+- PAD uncertainty
+- security component unavailable
+
+Do not force a result.
+
+---
+
+# 14. Security gate
+
+Automated attendance should conceptually require:
+
+```python
+authorized = (
+    identity_confident
+    and sufficient_observations
+    and quality_requirements_satisfied
+    and pad_passed
+    and security_components_available
+)
+```
+
+Adapt this to the actual implementation.
+
+These conditions must never authorize attendance:
+
+```text
+PAD_ERROR
+MODEL_UNAVAILABLE
+unknown identity
+insufficient biometric evidence
+unresolved track
+multiple-face ambiguity
+failed liveness
+```
+
+Recognition confidence cannot override a failed security gate.
+
+---
+
+# 15. Tests
+
+Add or update deterministic tests for:
+
+## Burst aggregation
+
+- one frame cannot commit attendance
+- multiple consistent observations can
+- one bad frame does not invalidate a good track
+- insufficient observations produce unresolved
+- conflicting identities are handled safely
+- one attendance record per student/window
+
+## Small faces
+
+- trackable-small face remains tracked
+- later safe frame enables recognition
+- all-small observations become unresolved
+- tiny unusable faces do not force recognition
+
+## PAD
+
+- multi-frame PAD is actually used
+- minimum valid PAD samples are respected
+- spoof fails
+- PAD error fails closed
+- model unavailable fails closed
+- diagnostic fallback cannot authorize attendance
+
+## Quality
+
+- mild lighting variation does not automatically reject
+- severe image failure still rejects
+
+## Three-window voting
+
+Test:
+
+```text
+A = PRESENT
+B = PRESENT
+C = UNRESOLVED
+-> PRESENT
+```
+
+and other combinations according to the existing policy.
+
+## Performance
+
+Where practical, measure:
+
+- preview responsiveness
+- camera FPS
+- inference latency
+- burst processing time
+
+---
+
+# 16. Documentation consistency
+
+Do not leave README/specification claims that are stronger than the actual implementation.
+
+In particular, do not claim:
+
+- zero false rejections
+- 100% spoof prevention
+- guaranteed replay protection
+- impossible-to-bypass liveness
+
+Use measured results instead.
+
+If the README says the system has three windows but the scheduler does not, fix the implementation or the documentation so they agree.
+
+If the README describes a security component that is not actually part of the production path, correct the documentation.
+
+---
+
+# 17. Implementation discipline
+
+Before editing:
+
+1. inspect current code
+2. trace the real attendance path
+3. identify the smallest required changes
+4. preserve working components
+5. implement incrementally
+6. run targeted tests
+7. run the full test suite
+8. review the final diff
+
+Do not rewrite unrelated files.
+
+Do not create duplicate recognition, PAD, tracking, or scheduler systems.
+
+Do not add cloud services.
+
+Keep runtime offline.
+
+---
+
+# 18. Required final report
+
+After implementation, report:
+
+## Changed files
+
+File and reason for change.
+
+## Final architecture
+
+Show the actual implemented flow.
+
+## Recognition aggregation
+
+Explain:
+
+- observations
+- identity support
+- similarity aggregation
+- conflict handling
+
+## PAD
+
+Explain:
+
+- model
+- preprocessing
+- threshold
+- minimum sample count
+- aggregation
+- error behavior
+- fallback behavior
+
+## Small-face handling
+
+Explain:
+
+- recognition-safe
+- trackable-small
+- unusable
+- unresolved
+
+## Three-window system
+
+Explain exact timing and voting.
+
+## Performance
+
+Report measurements where available.
+
+## Tests
+
+List commands and results.
+
+## Known limitations
+
+Be honest about anything that still depends on the final classroom camera or hardware.
+
+---
+
+# 19. Final acceptance checklist
+
+```text
+[ ] Repository inspected before editing
+[ ] Actual attendance commit path identified
+[ ] No single-frame attendance commit
+[ ] Triple-window architecture verified
+[ ] Window A implemented
+[ ] Window B implemented
+[ ] Window C implemented
+[ ] 2-out-of-3 voting occurs at window level
+[ ] Track-level evidence implemented
+[ ] Trackable-small faces can accumulate evidence
+[ ] Later recognition-safe observations can recognize a track
+[ ] Best observations are bounded
+[ ] Recognition aggregation is identity-centric
+[ ] Multi-frame PAD is actually used
+[ ] PAD minimum sample count is enforced
+[ ] PAD failure fails closed
+[ ] Model-unavailable failure fails closed
+[ ] No permissive PAD fallback can authorize attendance
+[ ] Mild lighting variation does not unnecessarily reject a track
+[ ] Severe quality failures remain protected
+[ ] PRESENT/UNRESOLVED semantics are correct
+[ ] Camera preview remains responsive
+[ ] Heavy models are initialized once
+[ ] No unbounded frame backlog
+[ ] Camera resolution remains configurable
+[ ] 4K-capable UVC camera path is practical
+[ ] Tests updated
+[ ] Full test suite passes
+[ ] README and implementation agree
+[ ] Final diff reviewed
+[ ] No unrelated changes
+```
+
+Core rule:
+
+```text
+Do not manufacture certainty.
+
+The system must know:
+1. who the person is
+2. whether the presentation is genuine/live
+3. whether there is enough evidence to make the decision
+```
+
+Only when all required security conditions pass may automated attendance be recorded.

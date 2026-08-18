@@ -15,10 +15,14 @@ An advanced, privacy-first **Smart Attendance Tracking System** featuring **AES-
   - **`PRESENT`**: Student detected in **at least 2 out of 3 windows** (`wins_present >= 2`).
   - **`PARTIAL`**: Student detected in **only 1 window** (`wins_present == 1`).
   - **`ABSENT`**: Student detected in **0 windows** (`wins_present == 0`).
-- **🛡️ CLAHE Multi-Spectral Anti-Spoofing (PAD):**
-  - **2D Fast Fourier Transform (FFT) Moiré Pattern Analysis:** Detects periodic subpixel screen grids.
-  - **Specular Glass Glare & RGB Backlight Glow Filter:** Prevents spoofing via smartphone/tablet screens or printed photos.
-  - **CLAHE Lighting Normalization:** Guarantees zero false rejections for real human faces under dim, warm, or overhead fluorescent lighting.
+- **🛡️ Hybrid Offline Anti-Spoofing (PAD) & Multi-Frame Aggregator:**
+  - **Local MiniFASNet V2 & V1SE ONNX Inference:** Evaluates physical presentation attacks (printed photos, phone screens, monitors, and cutouts) offline on local CPU.
+  - **Multi-Frame Statistical Aggregator:** Enforces multi-observation temporal consistency (median score >= 0.70) across tracks to prevent single-frame false acceptances.
+  - **Fail-Closed Security Gate:** Ensures model errors or unavailable models never authorize attendance.
+- **👁️ 3-Tier Face Quality & Multi-Face Classroom Tracking:**
+  - **3-Tier Quality Hierarchy:** Categorizes faces into `RECOGNITION_SAFE` (front/mid rows), `TRACKABLE_BUT_SMALL` (back rows & suboptimal lighting), and `UNUSABLE` (severe blur or clipping).
+  - **Spatial-Temporal Multi-Face Tracker:** Simultaneously tracks multiple seated students across sample frames with non-blocking threaded camera acquisition.
+  - **Atomic Burst-Level Voting:** Accumulates candidate identity observations across the window and commits attendance once per window.
 - **📱 Installable PWA Web Dashboard:** Modern dark mode interface with offline Service Worker support, instant 4-digit PIN authentication, real-time student/staff enrollment, interactive timetable manager with OCR parsing, and 1-click Excel exports.
 - **🪪 Dedicated Staff Credentials & Biometric Directory:** Manage staff PIN codes, teaching roles, and daily staff attendance matrices.
 
