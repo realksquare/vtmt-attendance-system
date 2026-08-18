@@ -22,18 +22,19 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+import math
 from config import (
     EXPORTS_DIR, UNKNOWNS_DIR, MATCH_THRESHOLD, FRAME_WIDTH, FRAME_HEIGHT,
     DEFAULT_TIMETABLE_SLOTS
 )
-from encrypt import get_or_create_key
+from encrypt import get_or_create_key, decrypt_embedding
 from database import (
     init_db, SessionLocal, Student, FaceTemplate, HourlyAttendance, UnknownFace,
     StaffMember, StaffActivityLog, get_registered_students, get_all_timetable_slots,
     add_student_with_embedding, manual_override_attendance, authenticate_pin, log_activity,
     delete_student, update_timetable_slots, update_student_profile,
     add_staff_member_with_embedding, update_staff_member, delete_staff_member,
-    get_all_staff_members, get_staff_attendance_matrix
+    get_all_staff_members, get_staff_attendance_matrix, get_all_decrypted_templates
 )
 from recognition import FaceRecognizer
 from burst_engine import run_burst_capture

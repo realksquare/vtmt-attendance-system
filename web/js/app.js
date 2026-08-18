@@ -936,11 +936,75 @@ function handleInspectFileSelected(event) {
     reader.readAsDataURL(file);
 }
 
-function openInspectCameraModal() {
-    // Reuses the enrollment webcam stream for snapshot
-    openEnrollModal();
-    showToast("You can also upload any image directly for instant mathematical comparison!", "info");
+let inspectCameraStream = null;
+
+async function openInspectCameraModal() {
+    const modal = document.getElementById('modal-inspect-camera');
+    const video = document.getElementById('inspect-camera-video');
+    const previewImg = document.getElementById('inspect-captured-preview-img');
+
+    if (modal) modal.style.display = 'flex';
+    if (previewImg) previewImg.style.display = 'none';
+    if (video) video.style.display = 'block';
+
+    try {
+        inspectCameraStream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }
+        });
+        if (video) video.srcObject = inspectCameraStream;
+    } catch (err) {
+        showToast("Webcam Access Error: " + err.message, "error");
+    }
 }
+
+function closeInspectCameraModal() {
+    const modal = document.getElementById('modal-inspect-camera');
+    if (modal) modal.style.display = 'none';
+
+    if (inspectCameraStream) {
+        inspectCameraStream.getTracks().forEach(track => track.stop());
+        inspectCameraStream = null;
+    }
+}
+
+function captureInspectCameraFrame() {
+    const video = document.getElementById('inspect-camera-video');
+    if (!video || !video.videoWidth) {
+        showToast("Camera is not ready yet.", "error");
+        return;
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    const fullBase64 = canvas.toDataURL('image/jpeg', 0.92);
+    inspectProbeBase64 = fullBase64.split(',')[1];
+
+    inspectLoadedProbeImage = new Image();
+    inspectLoadedProbeImage.onload = function() {
+        const previewDiv = document.getElementById('inspect-probe-preview');
+        if (previewDiv) {
+            previewDiv.innerHTML = `
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <img src="${fullBase64}" style="width:50px; height:50px; object-fit:cover; border-radius:4px; border:1px solid var(--border);" />
+                    <div style="text-align:left; font-size:11px;">
+                        <strong style="color:var(--text);">Webcam Snapshot</strong><br>
+                        <span style="color:var(--emerald);"><i class="fa-solid fa-check"></i> ${canvas.width}x${canvas.height} px | Ready to Inspect</span>
+                    </div>
+                </div>
+            `;
+        }
+        const btn = document.getElementById('btn-run-biometric-inspect');
+        if (btn) btn.disabled = false;
+        closeInspectCameraModal();
+        showToast("Probe face snapshot captured successfully!", "success");
+    };
+    inspectLoadedProbeImage.src = fullBase64;
+}
+
 
 async function runBiometricInspection() {
     if (!inspectProbeBase64) {
@@ -1546,7 +1610,10 @@ window.populateInspectStudentDropdown = populateInspectStudentDropdown;
 window.loadEnrolledEmbeddingDetails = loadEnrolledEmbeddingDetails;
 window.handleInspectFileSelected = handleInspectFileSelected;
 window.openInspectCameraModal = openInspectCameraModal;
+window.closeInspectCameraModal = closeInspectCameraModal;
+window.captureInspectCameraFrame = captureInspectCameraFrame;
 window.runBiometricInspection = runBiometricInspection;
+
 
 
 

@@ -636,6 +636,30 @@
         </div>
     </div>
 
+    <!-- Probe Face Camera Snapshot Modal -->
+    <div class="auth-overlay" id="modal-inspect-camera" style="display:none;">
+        <div class="auth-card" style="max-width:480px; text-align:left;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                <h3 style="font-size:16px; font-weight:700;"><i class="fa-solid fa-camera" style="color:var(--primary-light);"></i> Capture Probe Face Snapshot</h3>
+                <button onclick="closeInspectCameraModal()" style="background:none; border:none; color:var(--text-muted); font-size:20px;">&times;</button>
+            </div>
+
+            <div style="position:relative; width:100%; height:220px; background:#000; border-radius:var(--radius-md); overflow:hidden; margin-bottom:12px;">
+                <video id="inspect-camera-video" autoplay playsinline style="width:100%; height:100%; object-fit:cover;"></video>
+                <img id="inspect-captured-preview-img" style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; display:none;">
+            </div>
+
+            <div style="display:flex; gap:10px;">
+                <button type="button" class="btn btn-secondary" onclick="closeInspectCameraModal()" style="flex:1; justify-content:center;">
+                    Cancel
+                </button>
+                <button type="button" class="btn btn-primary" onclick="captureInspectCameraFrame()" style="flex:2; justify-content:center;">
+                    <i class="fa-solid fa-camera"></i> Snap Probe Snapshot
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Staff Enrollment Modal -->
     <div class="auth-overlay" id="modal-enroll-staff" style="display:none;">
         <div class="auth-card" style="max-width:480px; text-align:left;">
@@ -804,6 +828,6 @@
             navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW failed:', err));
         }
     </script>
-    <script type="module" src="/web/js/app.js?v=12.0"></script>
+    <script type="module" src="/web/js/app.js?v=13.0"></script>
 </body>
 </html>
