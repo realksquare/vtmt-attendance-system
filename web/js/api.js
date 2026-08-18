@@ -201,12 +201,30 @@ export const API = {
         return result;
     },
 
-    async clearTodayUnknowns(adminName = 'Admin') {
-        const res = await fetch(`${API_BASE}/admin/unknowns/clear-today?admin_name=${encodeURIComponent(adminName)}`, {
-            method: 'DELETE'
-        });
+    async clearTodayUnknowns(adminName = "Admin") {
+        const res = await fetch(`${API_BASE}/admin/unknowns/clear-today?admin_name=${encodeURIComponent(adminName)}`, { method: 'DELETE' });
         const result = await res.json();
         if (!res.ok) throw new Error(result.detail || "Failed to clear unknowns");
         return result;
+    },
+
+    async getEnrolledEmbedding(studentId) {
+        const res = await fetch(`${API_BASE}/admin/biometrics/template/${encodeURIComponent(studentId)}`);
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || "Failed to fetch student biometric embedding");
+        return result;
+    },
+
+    async inspectBiometrics(data) {
+        const res = await fetch(`${API_BASE}/admin/biometrics/inspect`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || "Biometric inspection failed");
+        return result;
     }
 };
+
+window.API = API;

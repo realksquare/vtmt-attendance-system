@@ -440,6 +440,128 @@
                     </div>
                 </div>
 
+                <!-- Biometric Embedding Inspector & Match Laboratory -->
+                <div class="card" style="margin-bottom:16px; border:1px solid rgba(99,102,241,0.3);">
+                    <div class="card-title">
+                        <span><i class="fa-solid fa-dna" style="color:var(--primary-light);"></i> Biometric Embedding Inspector & Match Laboratory</span>
+                        <span class="badge badge-present" style="font-size:11px;">ADMIN EXCLUSIVE</span>
+                    </div>
+                    <p style="font-size:12px; color:var(--text-muted); margin-bottom:14px; line-height:1.5;">
+                        Inspect decrypted 512-dimensional facial embedding vectors, upload probe images, visualize 106 landmark points, and compare mathematical cosine similarities and angular distances against enrolled profiles.
+                    </p>
+
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
+                        <!-- Enrolled Student Selection -->
+                        <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border); border-radius:8px; padding:12px;">
+                            <label style="font-size:12px; font-weight:600; color:var(--text); margin-bottom:6px; display:block;">
+                                1. Select Enrolled Student / Profile:
+                            </label>
+                            <div style="display:flex; gap:8px; margin-bottom:10px;">
+                                <select id="inspect-student-select" style="flex:1; background:var(--bg-input); border:1px solid var(--border); border-radius:6px; color:var(--text); padding:8px 10px; font-size:12px;" onchange="loadEnrolledEmbeddingDetails()">
+                                    <option value="">-- Choose Student --</option>
+                                </select>
+                                <button class="btn btn-secondary" onclick="loadEnrolledEmbeddingDetails()" style="padding:6px 12px; font-size:11px;" title="Reload Vector">
+                                    <i class="fa-solid fa-arrows-rotate"></i>
+                                </button>
+                            </div>
+                            <div id="inspect-enrolled-preview" style="font-size:11px; color:var(--text-muted); background:var(--bg-card); border-radius:6px; padding:10px; border:1px solid var(--border); min-height:80px;">
+                                <em>Select an enrolled student to view their decrypted 512-D embedding blueprint.</em>
+                            </div>
+                        </div>
+
+                        <!-- Upload Inspection Probe Image -->
+                        <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border); border-radius:8px; padding:12px;">
+                            <label style="font-size:12px; font-weight:600; color:var(--text); margin-bottom:6px; display:block;">
+                                2. Upload or Capture Probe Face:
+                            </label>
+                            <div style="display:flex; gap:8px; margin-bottom:10px;">
+                                <input type="file" id="inspect-file-input" accept="image/*" style="display:none;" onchange="handleInspectFileSelected(event)">
+                                <button class="btn btn-secondary" onclick="document.getElementById('inspect-file-input').click()" style="flex:1; justify-content:center; font-size:12px;">
+                                    <i class="fa-solid fa-upload"></i> Upload Image (.jpg / .png)
+                                </button>
+                                <button class="btn btn-secondary" onclick="openInspectCameraModal()" style="font-size:12px;" title="Snap from Camera">
+                                    <i class="fa-solid fa-camera"></i>
+                                </button>
+                            </div>
+                            <div id="inspect-probe-preview" style="font-size:11px; color:var(--text-muted); background:var(--bg-card); border-radius:6px; padding:10px; border:1px solid var(--border); min-height:80px; text-align:center;">
+                                <em>No probe image selected yet.</em>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Action Button -->
+                    <button class="btn btn-primary" id="btn-run-biometric-inspect" onclick="runBiometricInspection()" style="width:100%; justify-content:center; padding:10px; font-size:13px;" disabled>
+                        <i class="fa-solid fa-chart-line"></i> Extract Embeddings & Compute Match Comparison
+                    </button>
+
+                    <!-- Inspection Results Section (Hidden until run) -->
+                    <div id="inspect-results-container" style="display:none; margin-top:16px;">
+                        <hr style="border:0; border-top:1px solid var(--border); margin:16px 0;">
+                        
+                        <!-- Top Comparison Metric Banners -->
+                        <div id="inspect-metrics-banner" style="display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; margin-bottom:16px;">
+                            <!-- Populated dynamically -->
+                        </div>
+
+                        <!-- Side by Side Face & Vectors -->
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
+                            <!-- Probe Face & Landmark Canvas -->
+                            <div class="card" style="background:var(--bg-card); padding:12px;">
+                                <div style="font-size:12px; font-weight:600; color:var(--text); margin-bottom:8px; display:flex; justify-content:space-between;">
+                                    <span><i class="fa-solid fa-draw-polygon" style="color:var(--primary-light);"></i> Probe Face & 106 Landmarks</span>
+                                    <span id="inspect-pad-badge" class="badge badge-present">LIVE</span>
+                                </div>
+                                <div style="text-align:center; position:relative; background:#000; border-radius:6px; overflow:hidden; max-height:260px; display:flex; justify-content:center; align-items:center;">
+                                    <canvas id="inspect-landmarks-canvas" style="max-width:100%; max-height:260px;"></canvas>
+                                </div>
+                                <div id="inspect-quality-stats" style="font-size:11px; color:var(--text-muted); margin-top:8px; display:flex; justify-content:space-between;">
+                                    <!-- Quality details -->
+                                </div>
+                            </div>
+
+                            <!-- 512-D Embedding Vector Analysis -->
+                            <div class="card" style="background:var(--bg-card); padding:12px;">
+                                <div style="font-size:12px; font-weight:600; color:var(--text); margin-bottom:8px;">
+                                    <i class="fa-solid fa-barcode" style="color:var(--emerald);"></i> 512-D Embedding Vector Heatmap
+                                </div>
+                                <div style="font-size:11px; color:var(--text-muted); margin-bottom:6px;">
+                                    Visualizing the first 128 normalized float components ($\vec{v} \in [-1, +1]$):
+                                </div>
+                                <div id="inspect-vector-heatmap" style="display:flex; flex-wrap:wrap; gap:2px; padding:6px; background:rgba(0,0,0,0.3); border-radius:6px; border:1px solid var(--border); max-height:160px; overflow-y:auto;">
+                                    <!-- Mini vector cells -->
+                                </div>
+                                <div id="inspect-vector-stats" style="font-size:11px; color:var(--text-muted); margin-top:8px; line-height:1.6;">
+                                    <!-- Vector stats -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Top Enrolled Institutional Matches Table -->
+                        <div class="card" style="background:var(--bg-card); padding:12px;">
+                            <div style="font-size:12px; font-weight:600; color:var(--text); margin-bottom:8px;">
+                                <i class="fa-solid fa-list-ol" style="color:var(--amber);"></i> Institutional Similarity Ranking (Top Candidates)
+                            </div>
+                            <div class="table-responsive">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Rank</th>
+                                            <th>Student ID</th>
+                                            <th>Name</th>
+                                            <th>Cosine Similarity</th>
+                                            <th>Match %</th>
+                                            <th>Decision</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="inspect-ranked-tbody">
+                                        <!-- Ranked rows -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Staff Activity Logs -->
                 <div class="card">
                     <div class="card-title">
@@ -682,6 +804,7 @@
             navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW failed:', err));
         }
     </script>
-    <script type="module" src="/web/js/app.js?v=10.0"></script>
+    <script src="js/api.js?v=11.0"></script>
+    <script type="module" src="/web/js/app.js?v=11.0"></script>
 </body>
 </html>

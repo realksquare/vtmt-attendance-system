@@ -825,6 +825,7 @@ async function renderAdminPanel() {
     // Load stats and burst slot options in parallel
     refreshAdminStats();
     _populateBurstSlotSelect();
+    populateInspectStudentDropdown();
     try {
         const logs = await API.getAdminActivity();
         if (logs.length === 0) {
@@ -844,6 +845,303 @@ async function renderAdminPanel() {
         body.innerHTML = html;
     } catch (e) {
         console.error("Error rendering admin panel:", e);
+    }
+}
+
+// ----------------------------------------------------
+// BIOMETRIC EMBEDDING INSPECTOR & MATCH LABORATORY
+// ----------------------------------------------------
+let inspectProbeBase64 = null;
+let inspectLoadedProbeImage = null;
+
+async function populateInspectStudentDropdown() {
+    const select = document.getElementById('inspect-student-select');
+    if (!select) return;
+
+    try {
+        const students = await API.getStudents();
+        const currentVal = select.value;
+        let html = '<option value="">-- Choose Student --</option>';
+        students.forEach(s => {
+            html += `<option value="${s.student_id}">${s.name} (${s.student_id}) - ${s.department}</option>`;
+        });
+        select.innerHTML = html;
+        if (currentVal) select.value = currentVal;
+    } catch (err) {
+        console.error("Failed to populate inspect student select:", err);
+    }
+}
+
+async function loadEnrolledEmbeddingDetails() {
+    const select = document.getElementById('inspect-student-select');
+    const previewDiv = document.getElementById('inspect-enrolled-preview');
+    if (!select || !previewDiv) return;
+
+    const studentId = select.value;
+    if (!studentId) {
+        previewDiv.innerHTML = '<em>Select an enrolled student to view their decrypted 512-D embedding blueprint.</em>';
+        return;
+    }
+
+    previewDiv.innerHTML = '<span style="color:var(--text-muted);"><i class="fa-solid fa-spinner fa-spin"></i> Decrypting 512-D template with AES-256...</span>';
+
+    try {
+        const data = await API.getEnrolledEmbedding(studentId);
+        let sampleHtml = data.vector_sample.slice(0, 16).map(v => `<span style="display:inline-block; padding:1px 4px; margin:1px; background:rgba(255,255,255,0.06); border-radius:3px; font-family:monospace; font-size:10px;">${v > 0 ? '+' : ''}${v.toFixed(3)}</span>`).join(' ');
+
+        previewDiv.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                <strong style="color:var(--text);">${data.name} (${data.student_id})</strong>
+                <span class="badge badge-present" style="font-size:10px;">L2 Norm: ${data.l2_norm.toFixed(3)}</span>
+            </div>
+            <div style="font-size:11px; color:var(--text-muted); margin-bottom:6px;">
+                Dimensions: <strong>${data.dimensions}</strong> | Mean: <code>${data.stats.mean}</code> | Std: <code>${data.stats.std}</code>
+            </div>
+            <div style="font-size:10px; color:var(--text-muted); margin-bottom:4px;">Vector Blueprint Sample (First 16 points):</div>
+            <div style="line-height:1.5;">${sampleHtml} ...</div>
+        `;
+    } catch (err) {
+        previewDiv.innerHTML = `<span style="color:var(--rose);"><i class="fa-solid fa-triangle-exclamation"></i> ${err.message}</span>`;
+    }
+}
+
+function handleInspectFileSelected(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const fullBase64 = e.target.result;
+        inspectProbeBase64 = fullBase64.split(',')[1];
+        
+        inspectLoadedProbeImage = new Image();
+        inspectLoadedProbeImage.onload = function() {
+            const previewDiv = document.getElementById('inspect-probe-preview');
+            if (previewDiv) {
+                previewDiv.innerHTML = `
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <img src="${fullBase64}" style="width:50px; height:50px; object-fit:cover; border-radius:4px; border:1px solid var(--border);" />
+                        <div style="text-align:left; font-size:11px;">
+                            <strong style="color:var(--text);">${file.name}</strong><br>
+                            <span style="color:var(--text-muted);">${inspectLoadedProbeImage.width}x${inspectLoadedProbeImage.height} px | Ready to Inspect</span>
+                        </div>
+                    </div>
+                `;
+            }
+            const btn = document.getElementById('btn-run-biometric-inspect');
+            if (btn) btn.disabled = false;
+        };
+        inspectLoadedProbeImage.src = fullBase64;
+    };
+    reader.readAsDataURL(file);
+}
+
+function openInspectCameraModal() {
+    // Reuses the enrollment webcam stream for snapshot
+    openEnrollModal();
+    showToast("You can also upload any image directly for instant mathematical comparison!", "info");
+}
+
+async function runBiometricInspection() {
+    if (!inspectProbeBase64) {
+        showToast("Please upload or capture a probe face image first.", "error");
+        return;
+    }
+
+    const select = document.getElementById('inspect-student-select');
+    const targetStudentId = select ? select.value : null;
+
+    const btn = document.getElementById('btn-run-biometric-inspect');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Extracting ArcFace Embeddings & Landmarks...';
+    }
+
+    try {
+        const res = await API.inspectBiometrics({
+            image_base64: inspectProbeBase64,
+            target_student_id: targetStudentId || null
+        });
+
+        renderBiometricInspectionResults(res);
+        showToast("Biometric inspection and similarity comparison complete!", "success");
+    } catch (err) {
+        showToast("Inspection Failed: " + err.message, "error");
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa-solid fa-chart-line"></i> Extract Embeddings & Compute Match Comparison';
+        }
+    }
+}
+
+function renderBiometricInspectionResults(data) {
+    const container = document.getElementById('inspect-results-container');
+    if (!container) return;
+    container.style.display = 'block';
+
+    const probe = data.probe_face;
+    const target = data.target_comparison;
+    const ranked = data.ranked_matches || [];
+
+    // 1. Metric Banners
+    const banner = document.getElementById('inspect-metrics-banner');
+    if (banner) {
+        let matchStatusHtml = '';
+        if (target) {
+            const isMatch = target.is_match;
+            matchStatusHtml = `
+                <div class="stat-card" style="border-left:4px solid ${isMatch ? 'var(--emerald)' : 'var(--rose)'};">
+                    <div class="stat-label">Match vs ${target.student_name}</div>
+                    <div class="stat-value" style="font-size:18px; color:${isMatch ? 'var(--emerald)' : 'var(--rose)'};">
+                        ${isMatch ? '<i class="fa-solid fa-circle-check"></i> VERIFIED MATCH' : '<i class="fa-solid fa-circle-xmark"></i> MISMATCH'}
+                    </div>
+                </div>
+                <div class="stat-card" style="border-left:4px solid var(--primary-light);">
+                    <div class="stat-label">Cosine Similarity</div>
+                    <div class="stat-value" style="font-size:22px; color:var(--primary-light);">${target.match_percent}%</div>
+                    <div style="font-size:10px; color:var(--text-muted);">Threshold: &ge; 50.0%</div>
+                </div>
+                <div class="stat-card" style="border-left:4px solid var(--amber);">
+                    <div class="stat-label">Angular Separation ($\theta$)</div>
+                    <div class="stat-value" style="font-size:20px; color:var(--amber);">${target.angular_separation_deg}&deg;</div>
+                    <div style="font-size:10px; color:var(--text-muted);">Euclidean: ${target.euclidean_distance}</div>
+                </div>
+            `;
+        } else {
+            const topMatch = ranked[0];
+            matchStatusHtml = `
+                <div class="stat-card" style="border-left:4px solid var(--primary-light);">
+                    <div class="stat-label">Top Candidate</div>
+                    <div class="stat-value" style="font-size:16px;">${topMatch ? topMatch.student_name : 'None'}</div>
+                    <div style="font-size:10px; color:var(--text-muted);">${topMatch ? topMatch.student_id : ''}</div>
+                </div>
+                <div class="stat-card" style="border-left:4px solid ${topMatch && topMatch.is_match ? 'var(--emerald)' : 'var(--text-muted)'};">
+                    <div class="stat-label">Top Similarity</div>
+                    <div class="stat-value" style="font-size:22px; color:${topMatch && topMatch.is_match ? 'var(--emerald)' : 'var(--text-muted)'};">${topMatch ? topMatch.match_percent : 0}%</div>
+                </div>
+                <div class="stat-card" style="border-left:4px solid var(--amber);">
+                    <div class="stat-label">Candidate Match State</div>
+                    <div class="stat-value" style="font-size:16px;">${topMatch && topMatch.is_match ? 'MATCH FOUND' : 'UNKNOWN FACE'}</div>
+                </div>
+            `;
+        }
+
+        const padBadge = probe.pad.passed ? '<span style="color:var(--emerald);"><i class="fa-solid fa-shield-check"></i> LIVE GENUINE</span>' : '<span style="color:var(--rose);"><i class="fa-solid fa-shield-halved"></i> SPOOF SUSPECTED</span>';
+
+        banner.innerHTML = `
+            ${matchStatusHtml}
+            <div class="stat-card" style="border-left:4px solid ${probe.pad.passed ? 'var(--emerald)' : 'var(--rose)'};">
+                <div class="stat-label">Anti-Spoofing (PAD)</div>
+                <div class="stat-value" style="font-size:16px;">${padBadge}</div>
+                <div style="font-size:10px; color:var(--text-muted);">Score: ${probe.pad.score} (MiniFASNet)</div>
+            </div>
+        `;
+    }
+
+    // 2. Draw Landmarks on Canvas
+    const canvas = document.getElementById('inspect-landmarks-canvas');
+    if (canvas && inspectLoadedProbeImage) {
+        canvas.width = inspectLoadedProbeImage.width;
+        canvas.height = inspectLoadedProbeImage.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(inspectLoadedProbeImage, 0, 0);
+
+        // Draw Bounding Box
+        if (probe.bbox && probe.bbox.length === 4) {
+            const [x1, y1, x2, y2] = probe.bbox;
+            ctx.strokeStyle = '#22c55e';
+            ctx.lineWidth = Math.max(2, Math.floor(canvas.width / 200));
+            ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        }
+
+        // Draw 106 Landmark Dots
+        if (probe.landmarks_106 && probe.landmarks_106.length > 0) {
+            ctx.fillStyle = '#06b6d4';
+            const radius = Math.max(1.5, canvas.width / 240);
+            probe.landmarks_106.forEach(([lx, ly]) => {
+                ctx.beginPath();
+                ctx.arc(lx, ly, radius, 0, 2 * Math.PI);
+                ctx.fill();
+            });
+        }
+    }
+
+    // Quality Stats
+    const qDiv = document.getElementById('inspect-quality-stats');
+    if (qDiv) {
+        qDiv.innerHTML = `
+            <span>Quality Tier: <strong>${probe.quality.tier}</strong></span>
+            <span>Sharpness Blur: <strong>${probe.quality.blur_score}</strong></span>
+            <span>Brightness: <strong>${probe.quality.brightness_mean}</strong></span>
+        `;
+    }
+
+    // PAD Badge
+    const padBadgeElem = document.getElementById('inspect-pad-badge');
+    if (padBadgeElem) {
+        padBadgeElem.className = probe.pad.passed ? 'badge badge-present' : 'badge badge-absent';
+        padBadgeElem.textContent = probe.pad.passed ? `LIVE (${probe.pad.score})` : `SPOOF (${probe.pad.score})`;
+    }
+
+    // 3. Vector Heatmap
+    const heatmapDiv = document.getElementById('inspect-vector-heatmap');
+    if (heatmapDiv) {
+        const samplePoints = probe.vector_full ? probe.vector_full.slice(0, 128) : probe.vector_sample;
+        let cellsHtml = '';
+        samplePoints.forEach((val, idx) => {
+            // Color map: negative = cyan/blue, 0 = dark, positive = purple/rose/emerald
+            let bg = 'rgba(255,255,255,0.05)';
+            if (val > 0.05) bg = `rgba(16, 185, 129, ${Math.min(1.0, val * 8)})`;
+            else if (val < -0.05) bg = `rgba(59, 130, 246, ${Math.min(1.0, Math.abs(val) * 8)})`;
+
+            cellsHtml += `<div title="Point #${idx}: ${val.toFixed(4)}" style="width:14px; height:14px; background:${bg}; border-radius:2px; font-size:7px; display:flex; align-items:center; justify-content:center; color:#fff; cursor:default;"></div>`;
+        });
+        heatmapDiv.innerHTML = cellsHtml;
+    }
+
+    const vStatsDiv = document.getElementById('inspect-vector-stats');
+    if (vStatsDiv) {
+        vStatsDiv.innerHTML = `
+            <strong>Vector Dimensions:</strong> 512 float32 | <strong>L2 Norm:</strong> ${probe.l2_norm.toFixed(4)}<br>
+            <strong>Mean:</strong> ${probe.stats.mean} | <strong>Std Dev:</strong> ${probe.stats.std} | <strong>Min:</strong> ${probe.stats.min} | <strong>Max:</strong> ${probe.stats.max}
+        `;
+    }
+
+    // 4. Ranked Matches Table
+    const tbody = document.getElementById('inspect-ranked-tbody');
+    if (tbody) {
+        if (ranked.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;">No enrolled students found to compare against.</td></tr>';
+            return;
+        }
+
+        let rHtml = '';
+        ranked.forEach((r, index) => {
+            const isMatch = r.is_match;
+            rHtml += `
+                <tr style="${index === 0 && isMatch ? 'background:rgba(16,185,129,0.08); font-weight:600;' : ''}">
+                    <td><strong>#${index + 1}</strong></td>
+                    <td><code>${r.student_id}</code></td>
+                    <td>${r.student_name}</td>
+                    <td><strong>${r.similarity.toFixed(4)}</strong></td>
+                    <td>
+                        <div style="display:flex; align-items:center; gap:6px;">
+                            <div style="flex:1; background:var(--border); height:6px; border-radius:3px; overflow:hidden; width:60px;">
+                                <div style="width:${Math.max(0, r.match_percent)}%; background:${isMatch ? 'var(--emerald)' : 'var(--primary-light)'}; height:100%;"></div>
+                            </div>
+                            <span>${r.match_percent}%</span>
+                        </div>
+                    </td>
+                    <td>
+                        <span class="badge ${isMatch ? 'badge-present' : 'badge-absent'}">
+                            ${isMatch ? 'MATCH' : 'DIFFERENT'}
+                        </span>
+                    </td>
+                </tr>
+            `;
+        });
+        tbody.innerHTML = rHtml;
     }
 }
 
@@ -1244,6 +1542,13 @@ window.renderStaffAttendance = renderStaffAttendance;
 window.renderTimetableSetup = renderTimetableSetup;
 window.renderUnknowns = renderUnknowns;
 window.renderAdminPanel = renderAdminPanel;
+window.populateInspectStudentDropdown = populateInspectStudentDropdown;
+window.loadEnrolledEmbeddingDetails = loadEnrolledEmbeddingDetails;
+window.handleInspectFileSelected = handleInspectFileSelected;
+window.openInspectCameraModal = openInspectCameraModal;
+window.runBiometricInspection = runBiometricInspection;
+
+
 
 
 
