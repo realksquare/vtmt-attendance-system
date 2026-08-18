@@ -517,6 +517,33 @@
                         <div id="inspect-multi-faces-bar" style="display:none; background:rgba(99,102,241,0.08); border:1px solid rgba(99,102,241,0.3); border-radius:8px; padding:10px 12px; margin-bottom:14px;">
                             <!-- Populated with face chips -->
                         </div>
+
+                        <!-- Multi-Face Database Roster Table -->
+                        <div id="inspect-multi-roster-container" style="display:none; margin-bottom:16px;">
+                            <div class="card" style="background:var(--bg-card); padding:14px; border:1px solid rgba(99,102,241,0.25);">
+                                <div style="font-size:13px; font-weight:600; color:var(--text); margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+                                    <span><i class="fa-solid fa-ranking-star" style="color:var(--amber);"></i> Group Photo Face Identification Roster (Ranked by Match Confidence)</span>
+                                    <span class="badge badge-present" id="inspect-roster-count-badge">2 Faces Resolved</span>
+                                </div>
+                                <div class="table-responsive">
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>Rank</th>
+                                                <th>Photo Face</th>
+                                                <th>Identified Student / Profile</th>
+                                                <th>Match Confidence</th>
+                                                <th>Attendance Status</th>
+                                                <th>Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="inspect-roster-tbody">
+                                            <!-- Populated dynamically -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
                         
                         <!-- Top Comparison Metric Banners -->
                         <div id="inspect-metrics-banner" style="display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; margin-bottom:16px;">
@@ -851,6 +878,6 @@
             navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW failed:', err));
         }
     </script>
-    <script type="module" src="/web/js/app.js?v=18.0"></script>
+    <script type="module" src="/web/js/app.js?v=19.0"></script>
 </body>
 </html>

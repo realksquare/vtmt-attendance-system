@@ -1033,13 +1033,18 @@ def inspect_and_compare_biometrics(req: BiometricInspectRequest):
             target_sim = float(rec.cosine_similarity(f_emb, target_template[2]))
 
         # Top match candidate across database
-        top_cand_id, top_cand_name, top_cand_sim = None, None, 0.0
+        top_cand_id, top_cand_name, top_cand_sim, top_cand_emb = None, "Unidentified Face", 0.0, None
         for sid, sname, enrolled_emb in templates:
             sim = float(rec.cosine_similarity(f_emb, enrolled_emb))
             if sim > top_cand_sim:
                 top_cand_sim = sim
                 top_cand_id = sid
                 top_cand_name = sname
+                top_cand_emb = enrolled_emb
+
+        is_top_match = bool(top_cand_sim >= MATCH_THRESHOLD)
+        clamped_sim = max(-1.0, min(1.0, top_cand_sim))
+        ang_deg = round(math.degrees(math.acos(clamped_sim)), 2) if top_cand_sim > 0 else 90.0
 
         detected_faces_summary.append({
             "face_index": idx,
@@ -1055,7 +1060,10 @@ def inspect_and_compare_biometrics(req: BiometricInspectRequest):
                 "student_name": top_cand_name,
                 "similarity": round(top_cand_sim, 4),
                 "match_percent": round(top_cand_sim * 100, 1),
-                "is_match": bool(top_cand_sim >= MATCH_THRESHOLD)
+                "angular_separation_deg": ang_deg,
+                "is_match": is_top_match,
+                "attendance_status": "PRESENT" if is_top_match else "UNRESOLVED",
+                "enrolled_embedding": top_cand_emb
             },
             "quality": {
                 "tier": q_res.tier.value if hasattr(q_res.tier, 'value') else str(q_res.tier),
@@ -1069,24 +1077,34 @@ def inspect_and_compare_biometrics(req: BiometricInspectRequest):
             }
         })
 
+    # Sort detected faces by confidence score descending to form the Roster Leaderboard
+    sorted_faces = sorted(detected_faces_summary, key=lambda x: x["top_candidate"]["similarity"], reverse=True)
+    for rank_i, f_info in enumerate(sorted_faces, 1):
+        f_info["roster_rank"] = rank_i
+
     # Choose active face to inspect
     if req.selected_face_index is not None and 0 <= req.selected_face_index < len(faces):
         active_idx = req.selected_face_index
     elif req.target_student_id:
-        # Multi-probe intelligent mapping: auto-focus on the face matching the selected enrolled student
         active_idx = max(range(len(detected_faces_summary)), key=lambda i: detected_faces_summary[i]["target_similarity"])
     else:
-        active_idx = 0
+        # Default to Rank #1 highest confidence detected face
+        active_idx = sorted_faces[0]["face_index"] if sorted_faces else 0
 
     active_face_data = detected_faces_summary[active_idx]
     active_face_obj = faces[active_idx]
     active_emb = active_face_obj.embedding
     active_emb_list = active_emb.tolist()
 
-    # Detailed comparison against target student for the active face
+    # Detailed comparison against target student or active face's top candidate
     target_comparison = None
-    if target_template:
-        t_id, t_name, t_emb = target_template
+    cmp_template = target_template
+    if not cmp_template and active_face_data["top_candidate"]["enrolled_embedding"] is not None:
+        tc = active_face_data["top_candidate"]
+        cmp_template = (tc["student_id"], tc["student_name"], tc["enrolled_embedding"])
+
+    if cmp_template:
+        t_id, t_name, t_emb = cmp_template
         sim = float(rec.cosine_similarity(active_emb, t_emb))
         clamped_sim = max(-1.0, min(1.0, sim))
         angle_rad = math.acos(clamped_sim)
@@ -1104,6 +1122,7 @@ def inspect_and_compare_biometrics(req: BiometricInspectRequest):
             "angular_separation_deg": round(angle_deg, 2),
             "euclidean_distance": round(euclidean_dist, 4),
             "is_match": bool(sim >= MATCH_THRESHOLD),
+            "attendance_status": "PRESENT" if sim >= MATCH_THRESHOLD else "UNRESOLVED",
             "enrolled_vector_sample": [round(x, 4) for x in t_emb_list[:32]],
             "enrolled_vector_full": [round(x, 5) for x in t_emb_list],
             "diff_vector_sample": diff_vector[:32],
@@ -1134,21 +1153,34 @@ def inspect_and_compare_biometrics(req: BiometricInspectRequest):
     for f_info in detected_faces_summary:
         clean_all_faces.append({
             "face_index": f_info["face_index"],
+            "roster_rank": f_info.get("roster_rank", 1),
             "bbox": f_info["bbox"],
             "landmarks_count": f_info["landmarks_count"],
             "target_similarity": f_info["target_similarity"],
             "target_match_percent": f_info["target_match_percent"],
             "is_target_match": f_info["is_target_match"],
-            "top_candidate": f_info["top_candidate"],
+            "top_candidate": {
+                "student_id": f_info["top_candidate"]["student_id"],
+                "student_name": f_info["top_candidate"]["student_name"],
+                "similarity": f_info["top_candidate"]["similarity"],
+                "match_percent": f_info["top_candidate"]["match_percent"],
+                "angular_separation_deg": f_info["top_candidate"]["angular_separation_deg"],
+                "is_match": f_info["top_candidate"]["is_match"],
+                "attendance_status": f_info["top_candidate"]["attendance_status"]
+            },
             "quality": f_info["quality"],
             "pad": f_info["pad"]
         })
+
+    # Clean sorted roster
+    clean_roster = sorted(clean_all_faces, key=lambda x: x["top_candidate"]["similarity"], reverse=True)
 
     return {
         "status": "success",
         "total_faces_detected": len(faces),
         "active_face_index": active_idx,
         "all_faces": clean_all_faces,
+        "ranked_roster": clean_roster,
         "probe_face": {
             "face_index": active_idx,
             "bbox": active_face_data["bbox"],

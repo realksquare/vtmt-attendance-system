@@ -373,6 +373,18 @@ def run_all_tests():
     test_tri_window_attendance()
     test_unknown_face_logging()
     test_manual_override()
+
+    # Clean up test artifacts & database records
+    db = SessionLocal()
+    try:
+        test_students = db.query(Student).filter(Student.student_id.like('TEST_STUDENT_%')).all()
+        for s in test_students:
+            db.query(HourlyAttendance).filter(HourlyAttendance.student_id == s.student_id).delete()
+            db.delete(s)
+        db.commit()
+    finally:
+        db.close()
+
     print("\n" + "="*60)
     print("  ALL AUDITED INTEGRATION TESTS PASSED SUCCESSFULLY!")
     print("="*60 + "\n")

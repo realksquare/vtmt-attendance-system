@@ -1142,27 +1142,32 @@ function renderBiometricInspectionResults(data) {
     const allFaces = data.all_faces || [];
     const activeIdx = data.active_face_index || 0;
 
-    // 0. Multi-Face Chips Toolbar
+    // 0. Multi-Face Chips & Roster Leaderboard
     const multiBar = document.getElementById('inspect-multi-faces-bar');
+    const rosterContainer = document.getElementById('inspect-multi-roster-container');
+    const rosterTbody = document.getElementById('inspect-roster-tbody');
+    const rosterCountBadge = document.getElementById('inspect-roster-count-badge');
+    const rankedRoster = data.ranked_roster || [];
+
     if (multiBar) {
         if (data.total_faces_detected > 1 || inspectMode === 'multi') {
             multiBar.style.display = 'block';
             let chipsHtml = `
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
                     <strong style="font-size:12px; color:var(--text);"><i class="fa-solid fa-users-viewfinder" style="color:var(--primary-light);"></i> Detected ${data.total_faces_detected} Face(s) in Probe Image:</strong>
-                    <span style="font-size:10px; color:var(--text-muted);">Click any detected face to map & inspect its 512-D vector:</span>
+                    <span style="font-size:10px; color:var(--text-muted);">Click any face to switch active 512-D embedding inspection:</span>
                 </div>
                 <div style="display:flex; flex-wrap:wrap; gap:8px;">
             `;
 
             allFaces.forEach(f => {
                 const isActive = (f.face_index === activeIdx);
-                const isTargetMatch = f.is_target_match;
-                const topCand = f.top_candidate;
+                const tc = f.top_candidate;
+                const isMatch = tc.is_match;
                 
                 let borderCol = isActive ? 'var(--emerald)' : 'var(--border)';
                 let bgCol = isActive ? 'rgba(16,185,129,0.18)' : 'rgba(255,255,255,0.04)';
-                let tagBadge = isTargetMatch ? `<span class="badge badge-present" style="font-size:9px;">TARGET MATCH (${f.target_match_percent}%)</span>` : `<span style="font-size:10px; color:var(--text-muted);">${f.target_match_percent}% match</span>`;
+                let tagBadge = isMatch ? `<span class="badge badge-present" style="font-size:9px;">${tc.student_name} (${tc.match_percent}%)</span>` : `<span style="font-size:10px; color:var(--text-muted);">Unknown (${tc.match_percent}%)</span>`;
 
                 chipsHtml += `
                     <button type="button" onclick="selectMultiProbeFace(${f.face_index})" style="background:${bgCol}; border:1px solid ${borderCol}; border-radius:6px; padding:5px 10px; display:flex; align-items:center; gap:8px; cursor:pointer; color:var(--text); font-size:11px;">
@@ -1176,6 +1181,50 @@ function renderBiometricInspectionResults(data) {
             multiBar.innerHTML = chipsHtml;
         } else {
             multiBar.style.display = 'none';
+        }
+    }
+
+    // Render Multi-Face Roster Leaderboard
+    if (rosterContainer && rosterTbody) {
+        if (rankedRoster.length > 0 && inspectMode === 'multi') {
+            rosterContainer.style.display = 'block';
+            if (rosterCountBadge) rosterCountBadge.textContent = `${data.total_faces_detected} Face(s) Scanned`;
+
+            let rRows = '';
+            rankedRoster.forEach((rf, idx) => {
+                const tc = rf.top_candidate;
+                const isMatch = tc.is_match;
+                const isActive = (rf.face_index === activeIdx);
+                const statusBadge = isMatch ? '<span class="badge badge-present"><i class="fa-solid fa-circle-check"></i> PRESENT</span>' : '<span class="badge badge-absent"><i class="fa-solid fa-circle-xmark"></i> UNRESOLVED</span>';
+
+                rRows += `
+                    <tr style="${isActive ? 'background:rgba(16,185,129,0.1); font-weight:600;' : ''}">
+                        <td><span class="badge badge-excused" style="font-size:11px;">#${idx + 1}</span></td>
+                        <td><strong>Face #${rf.face_index + 1}</strong></td>
+                        <td>
+                            <strong style="color:var(--text);">${tc.student_name}</strong>
+                            ${tc.student_id ? `<br><span style="font-size:10px; color:var(--text-muted); font-family:monospace;">ID: ${tc.student_id}</span>` : ''}
+                        </td>
+                        <td>
+                            <div style="display:flex; align-items:center; gap:6px;">
+                                <div style="flex:1; background:var(--border); height:6px; border-radius:3px; overflow:hidden; width:60px;">
+                                    <div style="width:${Math.max(0, tc.match_percent)}%; background:${isMatch ? 'var(--emerald)' : 'var(--primary-light)'}; height:100%;"></div>
+                                </div>
+                                <span style="font-family:monospace; font-size:11px;">${tc.match_percent}%</span>
+                            </div>
+                        </td>
+                        <td>${statusBadge}</td>
+                        <td>
+                            <button type="button" class="btn ${isActive ? 'btn-primary' : 'btn-secondary'}" onclick="selectMultiProbeFace(${rf.face_index})" style="padding:3px 8px; font-size:10px;">
+                                ${isActive ? '<i class="fa-solid fa-eye"></i> Active' : '<i class="fa-solid fa-magnifying-glass"></i> Inspect'}
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            });
+            rosterTbody.innerHTML = rRows;
+        } else {
+            rosterContainer.style.display = 'none';
         }
     }
 
@@ -1195,7 +1244,7 @@ function renderBiometricInspectionResults(data) {
                     <div class="stat-value" style="font-size:18px; color:${verdictColor};">
                         ${isMatch ? '<i class="fa-solid fa-circle-check"></i> ' + attendanceVerdict : '<i class="fa-solid fa-circle-xmark"></i> ' + attendanceVerdict}
                     </div>
-                    <div style="font-size:10px; color:var(--text-muted);">${isMatch ? 'Mapped to Enrolled Profile' : 'Below 0.50 Match Threshold'}</div>
+                    <div style="font-size:10px; color:var(--text-muted);">${isMatch ? `Matched to ${target.student_name}` : 'Below 0.50 Match Threshold'}</div>
                 </div>
                 <div class="stat-card" style="border-left:4px solid var(--primary-light);">
                     <div class="stat-label">Match Confidence Score</div>
@@ -1205,7 +1254,7 @@ function renderBiometricInspectionResults(data) {
                 <div class="stat-card" style="border-left:4px solid var(--amber);">
                     <div class="stat-label">Angular Separation (θ)</div>
                     <div class="stat-value" style="font-size:20px; color:var(--amber);">${target.angular_separation_deg}&deg;</div>
-                    <div style="font-size:10px; color:var(--text-muted);">Active Face: #${activeIdx + 1} of ${data.total_faces_detected}</div>
+                    <div style="font-size:10px; color:var(--text-muted);">Inspecting Face #${activeIdx + 1} of ${data.total_faces_detected}</div>
                 </div>
             `;
         } else {
@@ -1240,7 +1289,7 @@ function renderBiometricInspectionResults(data) {
         `;
     }
 
-    // 2. Draw Multi-Face Bounding Boxes & Landmarks on Canvas
+    // 2. Draw Multi-Face Bounding Boxes & Names on Canvas
     const canvas = document.getElementById('inspect-landmarks-canvas');
     if (canvas && inspectLoadedProbeImage) {
         canvas.width = inspectLoadedProbeImage.width;
@@ -1249,47 +1298,31 @@ function renderBiometricInspectionResults(data) {
         ctx.drawImage(inspectLoadedProbeImage, 0, 0);
 
         const strokeScale = Math.max(2, Math.floor(canvas.width / 220));
-        const fontSize = Math.max(12, Math.floor(canvas.width / 40));
+        const fontSize = Math.max(12, Math.floor(canvas.width / 36));
         ctx.font = `bold ${fontSize}px sans-serif`;
 
-        // In Multi-Probe mode, draw bounding boxes for ALL detected faces
-        if (inspectMode === 'multi' && allFaces.length > 1) {
-            allFaces.forEach(f => {
-                const [fx1, fy1, fx2, fy2] = f.bbox;
-                const isThisActive = (f.face_index === activeIdx);
-                const isMatch = f.is_target_match;
+        // Draw bounding boxes for ALL detected faces in the image
+        allFaces.forEach(f => {
+            const [fx1, fy1, fx2, fy2] = f.bbox;
+            const isThisActive = (f.face_index === activeIdx);
+            const tc = f.top_candidate;
+            const isMatch = tc.is_match;
 
-                if (!isThisActive) {
-                    // Non-active face: Draw yellow/cyan box
-                    ctx.strokeStyle = isMatch ? 'rgba(34, 197, 94, 0.7)' : 'rgba(234, 179, 8, 0.7)';
-                    ctx.lineWidth = strokeScale;
-                    ctx.strokeRect(fx1, fy1, fx2 - fx1, fy2 - fy1);
+            const boxColor = isThisActive ? '#22c55e' : (isMatch ? 'rgba(34, 197, 94, 0.8)' : 'rgba(234, 179, 8, 0.8)');
+            ctx.strokeStyle = boxColor;
+            ctx.lineWidth = isThisActive ? strokeScale + 2 : strokeScale;
+            ctx.strokeRect(fx1, fy1, fx2 - fx1, fy2 - fy1);
 
-                    // Label tag
-                    const labelText = `Face #${f.face_index + 1} (${f.target_match_percent}%)`;
-                    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-                    ctx.fillRect(fx1, Math.max(0, fy1 - fontSize - 6), ctx.measureText(labelText).width + 8, fontSize + 6);
-                    ctx.fillStyle = isMatch ? '#34d399' : '#fde047';
-                    ctx.fillText(labelText, fx1 + 4, Math.max(fontSize, fy1 - 4));
-                }
-            });
-        }
+            // Label Tag
+            const labelText = isMatch ? `✔ ${tc.student_name} (${tc.match_percent}%)` : `Face #${f.face_index + 1} (${tc.match_percent}%)`;
+            const tagBg = isThisActive ? 'rgba(16, 185, 129, 0.95)' : 'rgba(0, 0, 0, 0.75)';
+            const textWidth = ctx.measureText(labelText).width;
 
-        // Draw ACTIVE Selected Face with bright green box and 106 landmark dots
-        if (probe.bbox && probe.bbox.length === 4) {
-            const [x1, y1, x2, y2] = probe.bbox;
-            ctx.strokeStyle = '#22c55e';
-            ctx.lineWidth = strokeScale + 1;
-            ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-
-            // Active Banner Label
-            const targetName = target ? target.student_name : `Face #${activeIdx + 1}`;
-            const activeLabel = target && target.is_match ? `✔ ACTIVE MATCH: ${targetName} (${target.match_percent}%)` : `ACTIVE: ${targetName} (${target ? target.match_percent + '%' : 'Inspecting'})`;
-            ctx.fillStyle = 'rgba(16, 185, 129, 0.9)';
-            ctx.fillRect(x1, Math.max(0, y1 - fontSize - 8), ctx.measureText(activeLabel).width + 12, fontSize + 8);
-            ctx.fillStyle = '#ffffff';
-            ctx.fillText(activeLabel, x1 + 6, Math.max(fontSize, y1 - 4));
-        }
+            ctx.fillStyle = tagBg;
+            ctx.fillRect(fx1, Math.max(0, fy1 - fontSize - 6), textWidth + 10, fontSize + 6);
+            ctx.fillStyle = isThisActive ? '#ffffff' : (isMatch ? '#34d399' : '#fde047');
+            ctx.fillText(labelText, fx1 + 5, Math.max(fontSize, fy1 - 4));
+        });
 
         // Draw 106 Landmark Dots on Active Face
         if (probe.landmarks_106 && probe.landmarks_106.length > 0) {
